@@ -287,7 +287,7 @@ export default function HomePage() {
             <Link href="/admin" className="hover:text-honey-400 transition-colors">Admin</Link>
           </div>
           <p className="text-cream-600 text-xs">
-            © {new Date().getFullYear()} Cooperativa Folilco Nativo · Con ❤️ desde el sur de Chile
+            © 2025 Cooperativa Folilco Nativo · Con ❤️ desde el sur de Chile
           </p>
         </div>
       </footer>

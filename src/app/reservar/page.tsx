@@ -1,12 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import BookingFlow from "@/components/booking/BookingFlow";
 
 export const metadata: Metadata = {
   title: "Reservar",
   description: "Reserva tu estadía o experiencia en Folilco Nativo. Pago seguro con MercadoPago.",
+  robots: { index: false }, // No indexar el flujo de reserva
 };
 
-// Next.js 15: searchParams es Promise
+export const viewport: Viewport = {
+  themeColor: "#1a3a27",
+};
+
 interface Props {
   searchParams: Promise<{ error?: string }>;
 }
@@ -25,6 +29,7 @@ export default async function ReservarPage({ searchParams }: Props) {
           <a
             href="/"
             className="text-cream-400 hover:text-honey-400 text-sm transition-colors mb-4 inline-flex items-center gap-2"
+            aria-label="Volver al inicio"
           >
             ← Volver al inicio
           </a>
@@ -38,9 +43,9 @@ export default async function ReservarPage({ searchParams }: Props) {
       </div>
 
       {errorMsg && (
-        <div className="max-w-4xl mx-auto px-4 pt-6">
+        <div className="max-w-4xl mx-auto px-4 pt-6" role="alert">
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-5 py-4 flex gap-3">
-            <span>⚠️</span>
+            <span aria-hidden="true">⚠️</span>
             <p>{errorMsg}</p>
           </div>
         </div>

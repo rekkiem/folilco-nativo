@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import Image from "next/image";
 import type { Producto, ProductoTipo } from "@/types";
+import { useProducts } from "@/hooks/useProducts";
 
 const TIPO_LABELS: Record<ProductoTipo, string> = {
   alojamiento: "🏡 Alojamiento",
@@ -22,34 +24,23 @@ interface Props {
   onSelect: (p: Producto) => void;
 }
 
+type FiltroTipo = ProductoTipo | "todos";
+
 export default function ProductSelector({ selected, onSelect }: Props) {
-  const [productos, setProductos] = useState<Producto[]>([]);
-  const [filtro, setFiltro] = useState<ProductoTipo | "todos">("todos");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const { productos, loading, error, refetch } = useProducts();
+  const [filtro, setFiltro] = useState<FiltroTipo>("todos");
 
-  useEffect(() => {
-    fetch("/api/products")
-      .then((r) => r.json())
-      .then((data) => {
-        setProductos(Array.isArray(data) ? data : []);
-        setLoading(false);
-      })
-      .catch(() => {
-        setError(true);
-        setLoading(false);
-      });
-  }, []);
-
-  const filtrados = filtro === "todos"
-    ? productos.filter((p) => p.tipo !== "producto") // productos físicos se agregan como extras
-    : productos.filter((p) => p.tipo === filtro);
+  // productos físicos se agregan como extras en el paso de fechas
+  const filtrados =
+    filtro === "todos"
+      ? productos.filter((p) => p.tipo !== "producto")
+      : productos.filter((p) => p.tipo === filtro);
 
   if (loading) {
     return (
-      <div className="grid md:grid-cols-2 gap-6">
+      <div className="grid md:grid-cols-2 gap-6" aria-label="Cargando productos">
         {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="card p-0 overflow-hidden">
+          <div key={i} className="card p-0 overflow-hidden" aria-hidden="true">
             <div className="skeleton h-48" />
             <div className="p-5 space-y-3">
               <div className="skeleton h-6 rounded w-2/3" />
@@ -64,13 +55,10 @@ export default function ProductSelector({ selected, onSelect }: Props) {
 
   if (error) {
     return (
-      <div className="text-center py-16 text-forest-500">
+      <div className="text-center py-16 text-forest-500" role="alert">
         <p className="text-4xl mb-4">🌿</p>
         <p>No pudimos cargar los productos. ¿Tienes conexión a internet?</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="btn-primary mt-4"
-        >
+        <button onClick={refetch} className="btn-primary mt-4">
           Reintentar
         </button>
       </div>
@@ -84,20 +72,22 @@ export default function ProductSelector({ selected, onSelect }: Props) {
           ¿Qué quieres reservar?
         </h2>
         <p className="text-forest-500 text-sm">
-          Selecciona alojamiento o experiencia. Puedes agregar productos artesanales en el siguiente paso.
+          Selecciona alojamiento o experiencia. Puedes agregar productos artesanales
+          en el siguiente paso.
         </p>
       </div>
 
       {/* Filtros */}
-      <div className="flex gap-2 mb-8 flex-wrap">
-        {[
+      <div className="flex gap-2 mb-8 flex-wrap" role="group" aria-label="Filtrar por tipo">
+        {([
           { key: "todos", label: "🌿 Todo" },
           { key: "alojamiento", label: "🏡 Alojamiento" },
           { key: "experiencia", label: "🐴 Experiencias" },
-        ].map((f) => (
+        ] as { key: FiltroTipo; label: string }[]).map((f) => (
           <button
             key={f.key}
-            onClick={() => setFiltro(f.key as ProductoTipo | "todos")}
+            onClick={() => setFiltro(f.key)}
+            aria-pressed={filtro === f.key}
             className={`px-4 py-2 rounded-full text-sm font-medium transition-all border ${
               filtro === f.key
                 ? "bg-forest-700 text-white border-forest-700"
@@ -114,24 +104,29 @@ export default function ProductSelector({ selected, onSelect }: Props) {
           <button
             key={p.id}
             onClick={() => onSelect(p)}
-            className={`card text-left overflow-hidden transition-all hover:-translate-y-1 hover:shadow-lg ${
+            aria-pressed={selected?.id === p.id}
+            aria-label={`Seleccionar ${p.nombre}, ${formatCLP(p.precio_clp)} por ${p.tipo === "alojamiento" ? "noche" : "persona"}`}
+            className={`card text-left overflow-hidden transition-all hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-forest-600 ${
               selected?.id === p.id ? "ring-2 ring-forest-600 shadow-lg" : ""
             }`}
           >
             {p.imagen_url && (
               <div className="relative h-48 overflow-hidden">
-                <img
+                <Image
                   src={p.imagen_url}
                   alt={p.nombre}
-                  className="w-full h-full object-cover"
+                  fill
+                  sizes="(max-width: 768px) 100vw, 50vw"
+                  className="object-cover transition-transform duration-500 group-hover:scale-105"
+                  priority={false}
                 />
-                <div className="absolute top-3 left-3">
+                <div className="absolute top-3 left-3 z-10">
                   <span className="bg-forest-900/80 backdrop-blur-sm text-honey-400 text-xs px-2 py-1 rounded-full">
                     {TIPO_LABELS[p.tipo]}
                   </span>
                 </div>
                 {selected?.id === p.id && (
-                  <div className="absolute top-3 right-3 bg-forest-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-sm">
+                  <div className="absolute top-3 right-3 z-10 bg-forest-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-sm">
                     ✓
                   </div>
                 )}
@@ -143,7 +138,7 @@ export default function ProductSelector({ selected, onSelect }: Props) {
               <div className="flex items-center justify-between">
                 <div>
                   <span className="text-lg font-semibold text-honey-600">
-                    {new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", minimumFractionDigits: 0 }).format(p.precio_clp)}
+                    {formatCLP(p.precio_clp)}
                   </span>
                   <span className="text-forest-500 text-xs ml-1">
                     {p.tipo === "alojamiento" ? "/noche" : "/persona"}
