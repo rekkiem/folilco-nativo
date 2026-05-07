@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+import Image from "next/image";
 import { format, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
 import type { BookingState } from "./BookingFlow";
@@ -19,7 +21,7 @@ function formatCLP(n: number) {
   }).format(n);
 }
 
-export default function BookingSummary({ state, loading, onConfirmar, onBack }: Props) {
+function BookingSummary({ state, loading, onConfirmar, onBack }: Props) {
   const { producto, fechaInicio, fechaFin, cantidadPersonas, extras, precioTotal, noches } = state;
   if (!producto) return null;
 
@@ -38,10 +40,13 @@ export default function BookingSummary({ state, loading, onConfirmar, onBack }: 
       <div className="card p-6 mb-5">
         <div className="flex gap-4">
           {producto.imagen_url && (
-            <img
+            <Image
               src={producto.imagen_url}
               alt={producto.nombre}
-              className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
+              width={96}
+              height={96}
+              sizes="96px"
+              className="rounded-xl object-cover flex-shrink-0"
             />
           )}
           <div>
@@ -163,3 +168,5 @@ export default function BookingSummary({ state, loading, onConfirmar, onBack }: 
     </div>
   );
 }
+
+export default memo(BookingSummary);

@@ -13,14 +13,26 @@ interface LogEntry {
   [key: string]: unknown;
 }
 
-function formatEntry(level: LogLevel, msg: string, meta?: Record<string, unknown>): LogEntry {
-  return { level, msg, ts: new Date().toISOString(), ...meta };
+type LogMeta = Record<string, unknown>;
+
+function normalizeMeta(meta?: unknown): LogMeta | undefined {
+  if (meta === undefined) return undefined;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    if (meta instanceof Error) return { name: meta.name, message: meta.message, stack: meta.stack };
+    return meta as LogMeta;
+  }
+  return { value: meta };
+}
+
+function formatEntry(level: LogLevel, msg: string, meta?: unknown): LogEntry {
+  return { level, msg, ts: new Date().toISOString(), ...normalizeMeta(meta) };
 }
 
 const isDev = process.env.NODE_ENV !== "production";
 
-function emit(level: LogLevel, msg: string, meta?: Record<string, unknown>) {
+function emit(level: LogLevel, msg: string, meta?: unknown) {
   const entry = formatEntry(level, msg, meta);
+  const normalizedMeta = normalizeMeta(meta);
 
   if (isDev) {
     const prefix: Record<LogLevel, string> = {
@@ -29,7 +41,7 @@ function emit(level: LogLevel, msg: string, meta?: Record<string, unknown>) {
       warn: "⚠️  WARN ",
       error: "❌ ERROR",
     };
-    const metaStr = meta ? " " + JSON.stringify(meta) : "";
+    const metaStr = normalizedMeta ? " " + JSON.stringify(normalizedMeta) : "";
     const consoleFn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
     consoleFn(`[${entry.ts}] ${prefix[level]}: ${msg}${metaStr}`);
   } else {
@@ -40,8 +52,8 @@ function emit(level: LogLevel, msg: string, meta?: Record<string, unknown>) {
 }
 
 export const logger = {
-  debug: (msg: string, meta?: Record<string, unknown>) => emit("debug", msg, meta),
-  info: (msg: string, meta?: Record<string, unknown>) => emit("info", msg, meta),
-  warn: (msg: string, meta?: Record<string, unknown>) => emit("warn", msg, meta),
-  error: (msg: string, meta?: Record<string, unknown>) => emit("error", msg, meta),
+  debug: (msg: string, meta?: unknown) => emit("debug", msg, meta),
+  info: (msg: string, meta?: unknown) => emit("info", msg, meta),
+  warn: (msg: string, meta?: unknown) => emit("warn", msg, meta),
+  error: (msg: string, meta?: unknown) => emit("error", msg, meta),
 };

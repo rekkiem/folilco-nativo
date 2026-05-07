@@ -13,12 +13,13 @@ interface RateLimitEntry {
 const store = new Map<string, RateLimitEntry>();
 
 // Cleanup periódico para no acumular entradas antiguas
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [k, v] of store.entries()) {
     if (v.resetAt < now) store.delete(k);
   }
 }, 60_000);
+cleanupTimer.unref?.();
 
 interface RateLimitOptions {
   windowMs: number;

@@ -63,16 +63,14 @@ export function ensureEnvValidated() {
   validated = true;
   const { valid, missing, warnings } = validateEnv();
   if (warnings.length > 0) {
-    warnings.forEach((w) => // eslint-disable-next-line no-console
-    console.warn(`[Env] ⚠️  ${w}`));
+    warnings.forEach((w) => console.warn(`[Env] ⚠️  ${w}`));
   }
   if (!valid) {
     const msg = `[Env] ❌ Variables de entorno faltantes: ${missing.join(", ")}`;
     if (process.env.NODE_ENV === "production") {
       throw new Error(msg);
     } else {
-      // eslint-disable-next-line no-console
-    console.error(msg);
+      console.error(msg);
     }
   }
 }

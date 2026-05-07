@@ -34,7 +34,8 @@ function formatCLP(n: number) {
 }
 
 export default function DatePicker({ producto, fechaInicio, fechaFin, cantidadPersonas: initPersonas, extras: initExtras, onContinue, onBack }: Props) {
-  const [mesActual, setMesActual] = useState(new Date());
+  const [hoy, setHoy] = useState<Date | null>(null);
+  const [mesActual, setMesActual] = useState<Date | null>(null);
   const [fechasBloqueadas, setFechasBloqueadas] = useState<Set<string>>(new Set());
   const [selInicio, setSelInicio] = useState<Date | null>(fechaInicio ? parseISO(fechaInicio) : null);
   const [selFin, setSelFin] = useState<Date | null>(fechaFin ? parseISO(fechaFin) : null);
@@ -46,6 +47,12 @@ export default function DatePicker({ producto, fechaInicio, fechaFin, cantidadPe
   const [disponibilidad, setDisponibilidad] = useState<{ disponible: boolean; precio_total_clp: number; noches: number } | null>(null);
   const [errDisp, setErrDisp] = useState<string | null>(null);
   const checkAbort = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const currentDay = startOfDay(new Date());
+    setHoy(currentDay);
+    setMesActual(fechaInicio ? startOfMonth(parseISO(fechaInicio)) : startOfMonth(currentDay));
+  }, [fechaInicio]);
 
   // Detectar estado de red
   useEffect(() => {
@@ -62,6 +69,7 @@ export default function DatePicker({ producto, fechaInicio, fechaFin, cantidadPe
 
   // Cargar fechas bloqueadas del mes — con cache local
   useEffect(() => {
+    if (!mesActual) return;
     const mes = format(mesActual, "yyyy-MM");
     const cached = getCachedAvailability(producto.id, mes);
     if (cached) {
@@ -124,7 +132,7 @@ export default function DatePicker({ producto, fechaInicio, fechaFin, cantidadPe
   }, [selInicio, selFin, producto.id, offline]);
 
   const esBloqueado = useCallback((date: Date) => fechasBloqueadas.has(format(date, "yyyy-MM-dd")), [fechasBloqueadas]);
-  const esPasado = (date: Date) => isBefore(startOfDay(date), startOfDay(new Date()));
+  const esPasado = (date: Date) => (hoy ? isBefore(startOfDay(date), hoy) : true);
 
   const handleDiaClick = (date: Date) => {
     if (esPasado(date) || esBloqueado(date)) return;
@@ -146,6 +154,20 @@ export default function DatePicker({ producto, fechaInicio, fechaFin, cantidadPe
   };
 
   const enRango = (date: Date) => selInicio && selFin && isAfter(date, selInicio) && isBefore(date, selFin);
+
+  if (!hoy || !mesActual) {
+    return (
+      <div className="space-y-8" aria-busy="true">
+        <div>
+          <h2 className="font-display text-2xl text-forest-900 mb-1">Elige tus fechas</h2>
+          <p className="text-forest-500 text-sm">{producto.nombre} · {formatCLP(producto.precio_clp)}/noche</p>
+        </div>
+        <div className="card p-5">
+          <div className="skeleton h-80 rounded-xl" />
+        </div>
+      </div>
+    );
+  }
 
   const primerDia = startOfMonth(mesActual);
   const diasMes = eachDayOfInterval({ start: primerDia, end: endOfMonth(mesActual) });
@@ -186,7 +208,7 @@ export default function DatePicker({ producto, fechaInicio, fechaFin, cantidadPe
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={() => setMesActual(subMonths(mesActual, 1))}
-              disabled={isBefore(startOfMonth(subMonths(mesActual, 1)), startOfMonth(new Date()))}
+              disabled={isBefore(startOfMonth(subMonths(mesActual, 1)), startOfMonth(hoy))}
               className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-cream-100 disabled:opacity-30 transition-colors"
             >‹</button>
             <span className="font-medium text-forest-900 capitalize">

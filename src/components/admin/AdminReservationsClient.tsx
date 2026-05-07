@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Reserva } from "@/types";
 
 function formatCLP(n: number) {
@@ -24,7 +24,7 @@ export default function AdminReservationsClient() {
   const [filtroEstado, setFiltroEstado] = useState("");
   const [search, setSearch] = useState("");
 
-  const fetchReservas = async () => {
+  const fetchReservas = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page) });
     if (filtroEstado) params.set("estado", filtroEstado);
@@ -34,9 +34,9 @@ export default function AdminReservationsClient() {
     setTotal(data.total ?? 0);
     setPages(data.pages ?? 1);
     setLoading(false);
-  };
+  }, [filtroEstado, page]);
 
-  useEffect(() => { fetchReservas(); }, [page, filtroEstado]);
+  useEffect(() => { fetchReservas(); }, [fetchReservas]);
 
   const cambiarEstado = async (id: string, estado: string) => {
     await fetch(`/api/admin/reservations?id=${id}`, {

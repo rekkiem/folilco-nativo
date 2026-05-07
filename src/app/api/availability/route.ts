@@ -11,6 +11,49 @@ const schema = z.object({
   fecha_fin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
+const DEMO_PRODUCTS: Record<string, { precio_clp: number; tipo: string }> = {
+  "00000000-0000-0000-0000-000000000001": { precio_clp: 85000, tipo: "alojamiento" },
+  "00000000-0000-0000-0000-000000000002": { precio_clp: 120000, tipo: "alojamiento" },
+  "00000000-0000-0000-0000-000000000003": { precio_clp: 150000, tipo: "alojamiento" },
+  "00000000-0000-0000-0000-000000000004": { precio_clp: 35000, tipo: "experiencia" },
+  "00000000-0000-0000-0000-000000000005": { precio_clp: 28000, tipo: "experiencia" },
+  "00000000-0000-0000-0000-000000000006": { precio_clp: 9500, tipo: "producto" },
+  "00000000-0000-0000-0000-000000000007": { precio_clp: 6500, tipo: "producto" },
+};
+
+function isSupabaseConfigured(): boolean {
+  return !!(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_URL !== "https://tu-proyecto.supabase.co" &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY !== "tu-service-role-key-privada"
+  );
+}
+
+function demoAvailability(productoId: string, inicio: Date, fin: Date) {
+  const producto = DEMO_PRODUCTS[productoId];
+  if (!producto) {
+    return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
+  }
+
+  const noches = Math.max(
+    1,
+    Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24))
+  );
+  const unidades = producto.tipo === "alojamiento" ? noches : 1;
+
+  return NextResponse.json(
+    {
+      disponible: true,
+      noches,
+      precio_total_clp: producto.precio_clp * unidades,
+      precio_por_noche: producto.precio_clp,
+      conflictos: [],
+    },
+    { headers: { "X-Data-Source": "demo" } }
+  );
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
@@ -57,6 +100,10 @@ export async function GET(req: NextRequest) {
       { error: "La fecha de fin debe ser posterior al inicio" },
       { status: 400 }
     );
+  }
+
+  if (!isSupabaseConfigured() || DEMO_PRODUCTS[producto_id]) {
+    return demoAvailability(producto_id, inicio, fin);
   }
 
   try {
@@ -134,6 +181,17 @@ export async function POST(req: NextRequest) {
 
     if (!producto_id || !mes) {
       return NextResponse.json({ error: "Faltan parámetros" }, { status: 400 });
+    }
+
+    if (!isSupabaseConfigured() || DEMO_PRODUCTS[producto_id]) {
+      return NextResponse.json(
+        {
+          producto_id,
+          mes,
+          fechas_bloqueadas: [],
+        },
+        { headers: { "X-Data-Source": "demo" } }
+      );
     }
 
     // mes = YYYY-MM, calcular rango

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import Image from "next/image";
 import type { Producto, ProductoTipo } from "@/types";
 import { useProducts } from "@/hooks/useProducts";
@@ -26,7 +26,7 @@ interface Props {
 
 type FiltroTipo = ProductoTipo | "todos";
 
-export default function ProductSelector({ selected, onSelect }: Props) {
+function ProductSelector({ selected, onSelect }: Props) {
   const { productos, loading, error, refetch } = useProducts();
   const [filtro, setFiltro] = useState<FiltroTipo>("todos");
 
@@ -157,3 +157,5 @@ export default function ProductSelector({ selected, onSelect }: Props) {
     </div>
   );
 }
+
+export default memo(ProductSelector);

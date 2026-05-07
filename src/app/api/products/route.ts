@@ -3,6 +3,8 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { logger } from "@/lib/logger";
 
 // Datos de fallback para desarrollo sin Supabase configurado
+const DEMO_TIMESTAMP = "2025-01-01T00:00:00.000Z";
+
 const FALLBACK_PRODUCTS = [
   {
     id: "00000000-0000-0000-0000-000000000001",
@@ -18,8 +20,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: null,
     stock_minimo: null,
     socio_responsable: "María González",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
   {
     id: "00000000-0000-0000-0000-000000000002",
@@ -35,8 +37,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: null,
     stock_minimo: null,
     socio_responsable: "Carlos Muñoz",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
   {
     id: "00000000-0000-0000-0000-000000000003",
@@ -52,8 +54,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: null,
     stock_minimo: null,
     socio_responsable: "Ana Pinto",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
   {
     id: "00000000-0000-0000-0000-000000000004",
@@ -69,8 +71,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: null,
     stock_minimo: null,
     socio_responsable: "Roberto Salvo",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
   {
     id: "00000000-0000-0000-0000-000000000005",
@@ -86,8 +88,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: null,
     stock_minimo: null,
     socio_responsable: "María González",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
   {
     id: "00000000-0000-0000-0000-000000000006",
@@ -103,8 +105,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: 50,
     stock_minimo: 10,
     socio_responsable: "Pedro Flores",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
   {
     id: "00000000-0000-0000-0000-000000000007",
@@ -120,8 +122,8 @@ const FALLBACK_PRODUCTS = [
     stock_actual: 30,
     stock_minimo: 5,
     socio_responsable: "Ana Pinto",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: DEMO_TIMESTAMP,
+    updated_at: DEMO_TIMESTAMP,
   },
 ];
 

@@ -143,10 +143,12 @@ export default function HomePage() {
             {ALOJAMIENTOS.map((a) => (
               <div key={a.id} className="card overflow-hidden group">
                 <div className="relative h-56 overflow-hidden">
-                  <img
+                  <Image
                     src={a.img}
                     alt={a.nombre}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    fill
+                    sizes="(max-width: 768px) 100vw, 33vw"
+                    className="object-cover transition-transform duration-500 group-hover:scale-105"
                   />
                   <div className="absolute bottom-3 right-3 bg-forest-900/80 backdrop-blur-sm text-honey-400 font-semibold text-sm px-3 py-1 rounded-full">
                     desde {formatCLP(a.precio)}/noche
@@ -201,11 +203,13 @@ export default function HomePage() {
             <h2 className="section-title mb-4">Productos artesanales</h2>
           </div>
           <div className="grid md:grid-cols-2 gap-8 items-center">
-            <div>
-              <img
+            <div className="relative h-72 overflow-hidden rounded-2xl shadow-lg">
+              <Image
                 src="https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=700&q=80"
                 alt="Miel artesanal Folilco"
-                className="rounded-2xl w-full h-72 object-cover shadow-lg"
+                fill
+                sizes="(max-width: 768px) 100vw, 50vw"
+                className="object-cover"
               />
             </div>
             <div className="space-y-6">

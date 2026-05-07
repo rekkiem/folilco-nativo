@@ -1,11 +1,22 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState, useCallback } from "react";
 import type { Producto } from "@/types";
 import ProductSelector from "./ProductSelector";
-import DatePicker from "./DatePicker";
 import GuestForm from "./GuestForm";
 import BookingSummary from "./BookingSummary";
+
+const DatePicker = dynamic(() => import("./DatePicker"), {
+  loading: () => (
+    <div className="space-y-8" aria-busy="true">
+      <div className="h-8 skeleton rounded w-56" />
+      <div className="card p-5">
+        <div className="skeleton h-80 rounded-xl" />
+      </div>
+    </div>
+  ),
+});
 
 export type BookingStep = "producto" | "fechas" | "datos" | "resumen";
 

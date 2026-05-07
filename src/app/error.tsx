@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { logger } from "@/lib/logger";
 
 interface Props {
@@ -36,12 +37,12 @@ export default function GlobalError({ error, reset }: Props) {
           >
             Intentar de nuevo
           </button>
-          <a
+          <Link
             href="/"
             className="border border-cream-400 text-cream-200 hover:bg-cream-200 hover:text-forest-900 font-medium px-6 py-3 rounded-lg transition-colors"
           >
             Volver al inicio
-          </a>
+          </Link>
         </div>
       </div>
     </div>

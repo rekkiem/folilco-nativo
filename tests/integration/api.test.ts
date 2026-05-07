@@ -249,7 +249,11 @@ describe("WhatsApp – lógica de envío y flags", () => {
       { tel: "123", valid: false },
     ];
     for (const { tel, valid } of telefonos) {
-      const normalizado = tel.replace(/[^\d+]/g, "");
+      let normalizado = tel.replace(/[^\d+]/g, "");
+      if (normalizado.startsWith("0")) normalizado = normalizado.slice(1);
+      if (!normalizado.startsWith("+")) {
+        normalizado = normalizado.startsWith("56") ? `+${normalizado}` : `+56${normalizado}`;
+      }
       const esValido = normalizado.replace("+", "").length >= 10;
       expect(esValido).toBe(valid);
     }

@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import Link from "next/link";
+import { Suspense } from "react";
 import BookingFlow from "@/components/booking/BookingFlow";
+import ReservarLoading from "./loading";
 
 export const metadata: Metadata = {
   title: "Reservar",
@@ -26,13 +29,13 @@ export default async function ReservarPage({ searchParams }: Props) {
     <div className="min-h-screen bg-cream-50">
       <div className="bg-forest-900 py-10">
         <div className="max-w-4xl mx-auto px-4">
-          <a
+          <Link
             href="/"
             className="text-cream-400 hover:text-honey-400 text-sm transition-colors mb-4 inline-flex items-center gap-2"
             aria-label="Volver al inicio"
           >
             ← Volver al inicio
-          </a>
+          </Link>
           <h1 className="font-display text-3xl md:text-4xl text-cream-50 mt-2">
             Haz tu reserva
           </h1>
@@ -51,7 +54,9 @@ export default async function ReservarPage({ searchParams }: Props) {
         </div>
       )}
 
-      <BookingFlow />
+      <Suspense fallback={<ReservarLoading />}>
+        <BookingFlow />
+      </Suspense>
     </div>
   );
 }

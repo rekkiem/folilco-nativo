@@ -5,6 +5,7 @@ const config = {
     "^.+\\.tsx?$": ["ts-jest", { tsconfig: { module: "CommonJS" } }],
   },
   moduleNameMapper: { "^@/(.*)$": "<rootDir>/src/$1" },
+  setupFilesAfterEnv: ["<rootDir>/tests/setup.ts"],
   testMatch: [
     "**/tests/unit/**/*.test.ts",
     "**/tests/integration/**/*.test.ts",

@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
     let precioTotal = producto.precio_clp * (producto.tipo === "alojamiento" ? noches : 1) * data.cantidad_personas;
 
     // Calcular extras
-    let extrasData: { producto_id: string; nombre: string; precio: number; cantidad: number }[] = [];
+    const extrasData: { producto_id: string; nombre: string; precio: number; cantidad: number }[] = [];
     if (data.extras && data.extras.length > 0) {
       const extraIds = data.extras.map((e) => e.producto_id);
       const { data: extrasProds } = await supabaseAdmin

@@ -4,7 +4,6 @@ import {
   verificarCredenciales,
   setSessionCookie,
   clearSessionCookie,
-  COOKIE_NAME,
 } from "@/lib/auth";
 import { adminLoginLimiter, getClientIP } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";

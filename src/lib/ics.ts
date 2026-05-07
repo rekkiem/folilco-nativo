@@ -1,4 +1,4 @@
-import ical from "ical-generator";
+import ical, { ICalEventBusyStatus, ICalEventStatus } from "ical-generator";
 import { parseISO } from "date-fns";
 import type { Reserva } from "@/types";
 
@@ -41,8 +41,8 @@ export function generarICS(
         `Total: $${reserva.precio_total_clp.toLocaleString("es-CL")} CLP`,
         `Origen: ${reserva.origen}`,
       ].join("\n"),
-      status: "CONFIRMED",
-      busystatus: "BUSY",
+      status: ICalEventStatus.CONFIRMED,
+      busystatus: ICalEventBusyStatus.BUSY,
     });
   }
 

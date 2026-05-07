@@ -81,7 +81,11 @@ export async function GET(req: NextRequest) {
       {} as Record<string, { nombre: string; reservas: number; ingresos: number }>
     );
 
-    const topProductos = Object.values(conteoProductos)
+    const topProductos = (Object.values(conteoProductos) as Array<{
+      nombre: string;
+      reservas: number;
+      ingresos: number;
+    }>)
       .sort((a, b) => b.ingresos - a.ingresos)
       .slice(0, 3);
 

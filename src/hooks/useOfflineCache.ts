@@ -112,7 +112,7 @@ export function useFechasBloqueadas(
 // ── Hook: productos con cache ──────────────────────────────
 export function useProductosCache<T>(
   url: string,
-  ttlMs: number = TTL_MS
+  _ttlMs: number = TTL_MS
 ): { data: T | null; loading: boolean; offline: boolean } {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);

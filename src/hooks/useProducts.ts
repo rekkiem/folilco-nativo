@@ -22,9 +22,10 @@ export function useProducts(tipo?: string): UseProductsResult {
   useEffect(() => {
     setLoading(true);
     setError(false);
+    const ctrl = new AbortController();
     const url = tipo ? `/api/products?tipo=${tipo}` : "/api/products";
 
-    fetch(url)
+    fetch(url, { signal: ctrl.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -33,10 +34,13 @@ export function useProducts(tipo?: string): UseProductsResult {
         setProductos(Array.isArray(data) ? data : []);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setError(true);
         setLoading(false);
       });
+
+    return () => ctrl.abort();
   }, [tipo, version]);
 
   return {

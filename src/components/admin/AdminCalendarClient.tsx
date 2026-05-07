@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import {
   format, addMonths, subMonths, startOfMonth, endOfMonth,
-  eachDayOfInterval, parseISO, isSameDay,
+  eachDayOfInterval,
 } from "date-fns";
 import { es } from "date-fns/locale";
 import type { Producto } from "@/types";
