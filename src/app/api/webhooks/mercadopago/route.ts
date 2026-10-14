@@ -110,13 +110,14 @@ export async function POST(req: NextRequest) {
           ? enviarWhatsApp("confirmacion", reservaActualizada, producto).then(
               async (res) => {
                 if (res.success) {
-                  await supabaseAdmin
+                  const { error } = await supabaseAdmin
                     .from("reservas")
                     .update({
                       wa_confirmacion_sent: true,
                       wa_confirmacion_sent_at: new Date().toISOString(),
                     })
                     .eq("id", reserva.id);
+                  if (error) throw error;
                 }
                 return res;
               }
@@ -127,10 +128,11 @@ export async function POST(req: NextRequest) {
         !reservaActualizada.sheets_synced
           ? agregarFilaReserva(reservaActualizada, producto).then(async (res) => {
               if (res.success) {
-                await supabaseAdmin
+                const { error } = await supabaseAdmin
                   .from("reservas")
                   .update({ sheets_synced: true })
                   .eq("id", reserva.id);
+                if (error) throw error;
               }
               return res;
             })
@@ -140,7 +142,8 @@ export async function POST(req: NextRequest) {
         !reservaActualizada.agenda_synced
           ? marcarAgendaOcupada(reservaActualizada).then(async (res) => {
               if (res.success) {
-                await supabaseAdmin.from("reservas").update({ agenda_synced: true }).eq("id", reserva.id);
+                const { error } = await supabaseAdmin.from("reservas").update({ agenda_synced: true }).eq("id", reserva.id);
+                if (error) throw error;
               }
               return res;
             })
