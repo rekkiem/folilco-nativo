@@ -30,7 +30,6 @@ const SERVER_ENV: EnvSchema[] = [
 ];
 
 export function validateEnv(): { valid: boolean; missing: string[]; warnings: string[] } {
-  const isProd = process.env.NODE_ENV === "production";
   const missing: string[] = [];
   const warnings: string[] = [];
 
