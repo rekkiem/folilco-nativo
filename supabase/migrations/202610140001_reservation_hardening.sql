@@ -96,3 +96,70 @@ REVOKE ALL ON FUNCTION public.crear_reserva_atomica(
 GRANT EXECUTE ON FUNCTION public.crear_reserva_atomica(
   TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT, DATE, DATE, INTEGER, INTEGER, INTEGER, TEXT
 ) TO service_role;
+
+-- Confirmar pagos bajo el mismo bloqueo que protege las reservas nuevas.
+-- Un pago tardío no debe reabrir una reserva expirada ni provocar sobreventa.
+CREATE OR REPLACE FUNCTION public.confirmar_reserva_pagada(
+  p_reserva_id UUID,
+  p_payment_id TEXT,
+  p_payment_status TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_reserva public.reservas;
+BEGIN
+  SELECT * INTO v_reserva
+  FROM public.reservas
+  WHERE id = p_reserva_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN FALSE;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_reserva.producto_id::TEXT, 0));
+
+  IF v_reserva.estado = 'confirmada' THEN
+    UPDATE public.reservas
+    SET mp_payment_id = p_payment_id, mp_payment_status = p_payment_status
+    WHERE id = p_reserva_id;
+    RETURN TRUE;
+  END IF;
+
+  IF v_reserva.estado <> 'pendiente'
+     OR (v_reserva.expires_at IS NOT NULL AND v_reserva.expires_at <= NOW())
+     OR EXISTS (
+       SELECT 1 FROM public.reservas r
+       WHERE r.id <> p_reserva_id
+         AND r.producto_id = v_reserva.producto_id
+         AND r.estado IN ('confirmada', 'pendiente')
+         AND (r.estado <> 'pendiente' OR r.expires_at IS NULL OR r.expires_at > NOW())
+         AND r.fecha_inicio < v_reserva.fecha_fin
+         AND r.fecha_fin > v_reserva.fecha_inicio
+     ) THEN
+    UPDATE public.reservas
+    SET estado = 'cancelada',
+        mp_payment_id = p_payment_id,
+        mp_payment_status = p_payment_status
+    WHERE id = p_reserva_id;
+    RETURN FALSE;
+  END IF;
+
+  UPDATE public.reservas
+  SET estado = 'confirmada',
+      mp_payment_id = p_payment_id,
+      mp_payment_status = p_payment_status
+  WHERE id = p_reserva_id;
+
+  RETURN TRUE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.confirmar_reserva_pagada(UUID, TEXT, TEXT)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.confirmar_reserva_pagada(UUID, TEXT, TEXT)
+  TO service_role;
