@@ -73,7 +73,6 @@ BEGIN
     RAISE EXCEPTION 'Fechas no disponibles' USING ERRCODE = '23P01';
   END IF;
 
-  RETURN QUERY
   INSERT INTO public.reservas (
     huesped_nombre, huesped_email, huesped_telefono, huesped_rut, huesped_nota,
     producto_id, producto_nombre, fecha_inicio, fecha_fin, cantidad_personas,
