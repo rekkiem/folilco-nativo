@@ -6,6 +6,7 @@ import { z } from "zod";
 import { parseISO, isBefore } from "date-fns";
 import { randomUUID } from "crypto";
 import { logger } from "@/lib/logger";
+import type { Reserva } from "@/types";
 
 const schema = z.object({
   producto_id: z.string().uuid(),
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest) {
     // 4. Crear reserva en estado "pendiente"
     const externalRef = randomUUID();
 
-    const { data: reserva, error: reservaErr } = await supabaseAdmin.rpc("crear_reserva_atomica", {
+    const { data: reservaRpcData, error: reservaErr } = await supabaseAdmin.rpc("crear_reserva_atomica", {
       p_huesped_nombre: data.huesped_nombre.trim(),
       p_huesped_email: data.huesped_email.toLowerCase().trim(),
       p_huesped_telefono: data.huesped_telefono.trim(),
@@ -136,6 +137,9 @@ export async function POST(req: NextRequest) {
       p_precio_total_clp: precioTotal,
       p_external_reference: externalRef,
     }).single();
+    // Supabase no tiene un tipo generado para esta función RPC; tipar explícitamente
+    // el registro devuelto evita que TypeScript lo infiera como {}.
+    const reserva = reservaRpcData as unknown as Reserva | null;
 
     if (reservaErr || !reserva) {
       if (reservaErr?.code === "23P01" || reservaErr?.message?.includes("Fechas no disponibles")) {
