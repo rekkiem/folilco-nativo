@@ -136,15 +136,30 @@ export async function POST(req: NextRequest) {
             })
           : Promise.resolve({ success: true, skip: true }),
 
-        // Google Sheets: marcar agenda ocupada
-        marcarAgendaOcupada(reservaActualizada),
+        // Google Sheets: marcar agenda ocupada una sola vez y reintentar si falla
+        !reservaActualizada.agenda_synced
+          ? marcarAgendaOcupada(reservaActualizada).then(async (res) => {
+              if (res.success) {
+                await supabaseAdmin.from("reservas").update({ agenda_synced: true }).eq("id", reserva.id);
+              }
+              return res;
+            })
+          : Promise.resolve({ success: true, skip: true }),
       ]);
 
+      const sideEffects = [waResult, sheetsResult, agendaResult];
+      const sideEffectsFailed = sideEffects.some((result) =>
+        result.status === "rejected" || (result.status === "fulfilled" && !result.value.success)
+      );
       logger.info(`[Webhook MP] Reserva ${reservaActualizada.numero} confirmada`, {
         whatsapp: waResult.status,
         sheets: sheetsResult.status,
         agenda: agendaResult.status,
+        sideEffectsFailed,
       });
+      if (sideEffectsFailed) {
+        return NextResponse.json({ error: "Pago registrado; faltan sincronizaciones que se reintentarán" }, { status: 500 });
+      }
     } else if (pago.status === "rejected" || pago.status === "cancelled") {
       await supabaseAdmin
         .from("reservas")
