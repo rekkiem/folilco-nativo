@@ -6,6 +6,7 @@ import { z } from "zod";
 import { parseISO, isBefore } from "date-fns";
 import { randomUUID } from "crypto";
 import { logger } from "@/lib/logger";
+import type { Reserva } from "@/types";
 
 const schema = z.object({
   producto_id: z.string().uuid(),
@@ -81,21 +82,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
     }
 
-    // 2. Verificar disponibilidad (doble check, el frontend ya lo hizo)
-    const { data: conflictos } = await supabaseAdmin
-      .from("reservas")
-      .select("id")
-      .eq("producto_id", data.producto_id)
-      .in("estado", ["confirmada", "pendiente"])
-      .lt("fecha_inicio", data.fecha_fin)
-      .gt("fecha_fin", data.fecha_inicio);
-
-    if (conflictos && conflictos.length > 0) {
-      return NextResponse.json(
-        { error: "Las fechas seleccionadas ya no están disponibles. Por favor, elige otras." },
-        { status: 409 }
-      );
-    }
+    // La disponibilidad se verifica de forma atómica en crear_reserva_atomica.
+    // Una consulta previa aquí tendría una carrera entre peticiones concurrentes.
 
     // 3. Calcular precio
     const noches = Math.round(
@@ -112,6 +100,10 @@ export async function POST(req: NextRequest) {
         .select("id, nombre, precio_clp, tipo, activo")
         .in("id", extraIds)
         .eq("activo", true);
+
+      if (!extrasProds || new Set(extraIds).size !== new Set(extrasProds.map((p) => p.id)).size) {
+        return NextResponse.json({ error: "Uno o más extras no están disponibles" }, { status: 400 });
+      }
 
       for (const extra of data.extras) {
         const prod = extrasProds?.find((p) => p.id === extra.producto_id);
@@ -130,36 +122,39 @@ export async function POST(req: NextRequest) {
     // 4. Crear reserva en estado "pendiente"
     const externalRef = randomUUID();
 
-    const { data: reserva, error: reservaErr } = await supabaseAdmin
-      .from("reservas")
-      .insert({
-        huesped_nombre: data.huesped_nombre.trim(),
-        huesped_email: data.huesped_email.toLowerCase().trim(),
-        huesped_telefono: data.huesped_telefono.trim(),
-        huesped_rut: data.huesped_rut?.trim() ?? null,
-        huesped_nota: data.huesped_nota?.trim() ?? null,
-        producto_id: data.producto_id,
-        producto_nombre: producto.nombre,
-        fecha_inicio: data.fecha_inicio,
-        fecha_fin: data.fecha_fin,
-        cantidad_personas: data.cantidad_personas,
-        precio_base_clp: producto.precio_clp,
-        precio_total_clp: precioTotal,
-        estado: "pendiente",
-        mp_external_reference: externalRef,
-        origen: "web",
-      })
-      .select()
-      .single();
+    const { data: reservaRpcData, error: reservaErr } = await supabaseAdmin.rpc("crear_reserva_atomica", {
+      p_huesped_nombre: data.huesped_nombre.trim(),
+      p_huesped_email: data.huesped_email.toLowerCase().trim(),
+      p_huesped_telefono: data.huesped_telefono.trim(),
+      p_huesped_rut: data.huesped_rut?.trim() ?? null,
+      p_huesped_nota: data.huesped_nota?.trim() ?? null,
+      p_producto_id: data.producto_id,
+      p_producto_nombre: producto.nombre,
+      p_fecha_inicio: data.fecha_inicio,
+      p_fecha_fin: data.fecha_fin,
+      p_cantidad_personas: data.cantidad_personas,
+      p_precio_base_clp: producto.precio_clp,
+      p_precio_total_clp: precioTotal,
+      p_external_reference: externalRef,
+    }).single();
+    // Supabase no tiene un tipo generado para esta función RPC; tipar explícitamente
+    // el registro devuelto evita que TypeScript lo infiera como {}.
+    const reserva = reservaRpcData as unknown as Reserva | null;
 
     if (reservaErr || !reserva) {
+      if (reservaErr?.code === "23P01" || reservaErr?.message?.includes("Fechas no disponibles")) {
+        return NextResponse.json(
+          { error: "Las fechas seleccionadas ya no están disponibles. Por favor, elige otras." },
+          { status: 409 }
+        );
+      }
       logger.error("[API reservations] Error creando reserva:", reservaErr);
       return NextResponse.json({ error: "Error al crear la reserva" }, { status: 500 });
     }
 
     // 5. Insertar extras
     if (extrasData.length > 0) {
-      await supabaseAdmin.from("reserva_extras").insert(
+      const { error: extrasError } = await supabaseAdmin.from("reserva_extras").insert(
         extrasData.map((e) => ({
           reserva_id: reserva.id,
           producto_id: e.producto_id,
@@ -169,16 +164,29 @@ export async function POST(req: NextRequest) {
           subtotal_clp: e.precio * e.cantidad,
         }))
       );
+      if (extrasError) {
+        await supabaseAdmin.from("reservas").update({ estado: "cancelada" }).eq("id", reserva.id);
+        logger.error("[API reservations] Error guardando extras:", extrasError);
+        return NextResponse.json({ error: "No se pudieron guardar los extras. Intenta nuevamente." }, { status: 500 });
+      }
     }
 
     // 6. Crear preferencia de pago en MercadoPago
-    const mpPref = await crearPreferenciaPago(reserva, producto, externalRef);
+    let mpPref: Awaited<ReturnType<typeof crearPreferenciaPago>>;
+    try {
+      mpPref = await crearPreferenciaPago(reserva, producto, externalRef);
+    } catch (paymentError) {
+      // No dejar una reserva fallida bloqueando fechas durante 30 minutos.
+      await supabaseAdmin.from("reservas").update({ estado: "cancelada" }).eq("id", reserva.id);
+      throw paymentError;
+    }
 
-    // 7. Guardar preference_id en la reserva
-    await supabaseAdmin
+    // 7. Guardar preference_id en la reserva y comprobar errores de persistencia
+    const { error: preferenceUpdateError } = await supabaseAdmin
       .from("reservas")
       .update({ mp_preference_id: mpPref.preference_id })
       .eq("id", reserva.id);
+    if (preferenceUpdateError) throw preferenceUpdateError;
 
     return NextResponse.json({
       reserva_id: reserva.id,

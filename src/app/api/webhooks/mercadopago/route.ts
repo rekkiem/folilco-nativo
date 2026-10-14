@@ -68,56 +68,65 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (reservaErr || !reserva) {
-      logger.warn(`[Webhook MP] Reserva no encontrada para ref: ${pago.external_reference}`);
-      return NextResponse.json({ received: true });
+      logger.error(`[Webhook MP] Reserva no encontrada para ref: ${pago.external_reference}`, reservaErr);
+      return NextResponse.json({ error: "Reserva aún no disponible para procesar" }, { status: 500 });
     }
 
     // 3. Actualizar estado según el pago
     if (pago.status === "approved") {
-      // Evitar procesar duplicados
-      if (reserva.estado === "confirmada") {
-        logger.info(`[Webhook MP] Reserva ${reserva.numero} ya estaba confirmada, skip`);
-        return NextResponse.json({ received: true });
+      // Los webhooks son al menos una vez: no repetir la transición, pero sí
+      // reintentar efectos secundarios que aún no estén marcados como completos.
+      const { data: paymentAccepted, error: confirmationError } = await supabaseAdmin.rpc(
+        "confirmar_reserva_pagada",
+        { p_reserva_id: reserva.id, p_payment_id: paymentId, p_payment_status: pago.status }
+      );
+      if (confirmationError) throw confirmationError;
+      if (paymentAccepted !== true) {
+        logger.error("[Webhook MP] Pago aprobado para reserva expirada o con conflicto; requiere revisión manual", {
+          reserva: reserva.numero,
+          paymentId,
+        });
+        // No reabrir ni sobre-vender: conciliación/reembolso manual fuera del webhook.
+        return NextResponse.json({ received: true, needs_manual_review: true });
       }
 
-      // Confirmar la reserva
-      await supabaseAdmin
+      // Leer flags frescos para que un webhook repetido pueda reparar efectos pendientes.
+      const { data: reservaActualizada, error: fetchError } = await supabaseAdmin
         .from("reservas")
-        .update({
-          estado: "confirmada",
-          mp_payment_id: paymentId,
-          mp_payment_status: pago.status,
-        })
-        .eq("id", reserva.id);
-
-      // Re-fetch la reserva actualizada
-      const { data: reservaActualizada } = await supabaseAdmin
-        .from("reservas")
-        .select("*")
+        .select("*, productos(*)")
         .eq("id", reserva.id)
         .single();
+      if (fetchError) throw fetchError;
 
       if (!reservaActualizada) {
         logger.error("[Webhook MP] Error refetching reserva actualizada");
         return NextResponse.json({ received: true });
       }
 
-      const producto = reserva.productos;
+      const producto = reservaActualizada.productos;
+      const whatsappConfigured = Boolean(
+        process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_WHATSAPP_FROM
+      );
+      const sheetsConfigured = Boolean(
+        process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY && process.env.GOOGLE_SPREADSHEET_ID
+      );
 
-      // 4. Disparar efectos secundarios en paralelo
+      // 4. Disparar efectos secundarios en paralelo; integraciones opcionales sin configurar se omiten.
+
       const [waResult, sheetsResult, agendaResult] = await Promise.allSettled([
         // WhatsApp de confirmación (solo si no se envió antes)
-        !reserva.wa_confirmacion_sent
+        whatsappConfigured && !reservaActualizada.wa_confirmacion_sent
           ? enviarWhatsApp("confirmacion", reservaActualizada, producto).then(
               async (res) => {
                 if (res.success) {
-                  await supabaseAdmin
+                  const { error } = await supabaseAdmin
                     .from("reservas")
                     .update({
                       wa_confirmacion_sent: true,
                       wa_confirmacion_sent_at: new Date().toISOString(),
                     })
                     .eq("id", reserva.id);
+                  if (error) throw error;
                 }
                 return res;
               }
@@ -125,29 +134,46 @@ export async function POST(req: NextRequest) {
           : Promise.resolve({ success: true, skip: true }),
 
         // Google Sheets: agregar fila de reserva
-        !reserva.sheets_synced
+        sheetsConfigured && !reservaActualizada.sheets_synced
           ? agregarFilaReserva(reservaActualizada, producto).then(async (res) => {
               if (res.success) {
-                await supabaseAdmin
+                const { error } = await supabaseAdmin
                   .from("reservas")
                   .update({ sheets_synced: true })
                   .eq("id", reserva.id);
+                if (error) throw error;
               }
               return res;
             })
           : Promise.resolve({ success: true, skip: true }),
 
-        // Google Sheets: marcar agenda ocupada
-        marcarAgendaOcupada(reservaActualizada),
+        // Google Sheets: marcar agenda ocupada una sola vez y reintentar si falla
+        sheetsConfigured && !reservaActualizada.agenda_synced
+          ? marcarAgendaOcupada(reservaActualizada).then(async (res) => {
+              if (res.success) {
+                const { error } = await supabaseAdmin.from("reservas").update({ agenda_synced: true }).eq("id", reserva.id);
+                if (error) throw error;
+              }
+              return res;
+            })
+          : Promise.resolve({ success: true, skip: true }),
       ]);
 
+      const sideEffects = [waResult, sheetsResult, agendaResult];
+      const sideEffectsFailed = sideEffects.some((result) =>
+        result.status === "rejected" || (result.status === "fulfilled" && !result.value.success)
+      );
       logger.info(`[Webhook MP] Reserva ${reservaActualizada.numero} confirmada`, {
         whatsapp: waResult.status,
         sheets: sheetsResult.status,
         agenda: agendaResult.status,
+        sideEffectsFailed,
       });
+      if (sideEffectsFailed) {
+        return NextResponse.json({ error: "Pago registrado; faltan sincronizaciones que se reintentarán" }, { status: 500 });
+      }
     } else if (pago.status === "rejected" || pago.status === "cancelled") {
-      await supabaseAdmin
+      const { error: cancelError } = await supabaseAdmin
         .from("reservas")
         .update({
           estado: "cancelada",
@@ -155,23 +181,25 @@ export async function POST(req: NextRequest) {
           mp_payment_status: pago.status,
         })
         .eq("id", reserva.id);
+      if (cancelError) throw cancelError;
 
       logger.info(`[Webhook MP] Reserva ${reserva.numero} cancelada/rechazada`);
     } else {
       // Pago pendiente: actualizar estado del pago sin cambiar estado de reserva
-      await supabaseAdmin
+      const { error: pendingPaymentError } = await supabaseAdmin
         .from("reservas")
         .update({
           mp_payment_id: paymentId,
           mp_payment_status: pago.status,
         })
         .eq("id", reserva.id);
+      if (pendingPaymentError) throw pendingPaymentError;
     }
 
     return NextResponse.json({ received: true });
   } catch (err) {
     logger.error("[Webhook MP] Error procesando webhook:", err);
-    // Retornar 200 para que MercadoPago no reintente (los reintentos los manejamos nosotros)
-    return NextResponse.json({ received: true });
+    // 5xx permite al proveedor reintentar; el procesamiento es idempotente.
+    return NextResponse.json({ error: "Error temporal procesando el pago" }, { status: 500 });
   }
 }

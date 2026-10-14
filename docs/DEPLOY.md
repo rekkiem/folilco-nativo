@@ -26,6 +26,7 @@ cp .env.example .env.local
 
 1. Crear proyecto en [supabase.com](https://supabase.com)
 2. Ir a **SQL Editor** → pegar y ejecutar el contenido de `supabase/schema.sql`
+3. Antes de habilitar reservas reales, ejecutar también `supabase/migrations/202610140001_reservation_hardening.sql` para activar caducidad y creación atómica de reservas.
 3. En **Settings → API**, copiar:
    - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
    - `anon public` → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
@@ -88,10 +89,7 @@ TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
 
 ### 5c. Inicializar las cabeceras
 
-```bash
-# Ejecutar una vez después del deploy
-curl -X POST https://tu-dominio.vercel.app/api/admin/sheets/init
-```
+Inicializa las hojas desde un entorno de administración autenticado. No publiques ni ejecutes un endpoint de inicialización sin autenticación. Verifica que la ruta administrativa esté desplegada y protegida antes de usarla.
 
 ```env
 GOOGLE_SERVICE_ACCOUNT_EMAIL=folilco@proyecto.iam.gserviceaccount.com
@@ -113,7 +111,8 @@ vercel --prod
 
 1. Ir a tu proyecto en [vercel.com](https://vercel.com)
 2. **Settings → Environment Variables**
-3. Agregar todas las variables de `.env.example`
+3. Configurar todas las variables críticas indicadas en la sección 8. Twilio y Google Sheets pueden quedar sin configurar si esas integraciones no se usarán.
+4. Generar secretos reales para producción; nunca copiar los valores de ejemplo. Usa al menos 32 caracteres aleatorios para `JWT_SECRET` y configura `CRON_SECRET` y `MERCADOPAGO_WEBHOOK_SECRET`.
 
 O por CLI:
 ```bash
@@ -124,16 +123,14 @@ vercel env add SUPABASE_SERVICE_ROLE_KEY
 
 ### Configurar dominio personalizado
 
-1. **Settings → Domains** → agregar `folilco.com`
-2. Actualizar DNS en tu proveedor de dominio:
-   - `CNAME @ cname.vercel-dns.com`
+1. **Settings → Domains** → agregar el dominio exacto que usarás.
+2. Copia los registros DNS que Vercel muestre para ese dominio. No asumas que el apex (`@`) admite CNAME; el proveedor puede requerir ALIAS/ANAME o un registro A específico.
 
 ---
 
 ## 7. Configurar Cron Job (WhatsApp automático)
 
-El archivo `vercel.json` ya configura el cron para ejecutar cada hora.
-Verificar en **Vercel Dashboard → Settings → Cron Jobs**.
+El archivo `vercel.json` configura el cron diario a las 09:00 UTC. Verifica el horario efectivo y las restricciones de cron del plan contratado en **Vercel Dashboard → Settings → Cron Jobs**. Si necesitas recordatorios varias veces al día, confirma primero que tu plan admite esa frecuencia.
 
 Para el cron funcione correctamente:
 ```env
@@ -177,7 +174,21 @@ CRON_SECRET=otro-secret-aleatorio
 
 ---
 
-## 9. Pruebas de humo post-deploy
+## 9. Comprobaciones previas al despliegue
+
+En local y en CI ejecuta:
+
+```bash
+npm ci
+npm run lint
+npm run type-check
+npm test
+npm run build
+```
+
+Configura las variables necesarias en el entorno de build cuando corresponda. Revisa el resultado de CI y el Preview Deployment antes de promover a producción. No uses credenciales de producción para pruebas de pago.
+
+## 10. Pruebas de humo post-deploy
 
 ```bash
 BASE_URL=https://folilco.com \
@@ -188,7 +199,7 @@ bash scripts/smoke-test.sh
 
 ---
 
-## 10. Costos estimados por mes
+## 11. Costos estimados por mes
 
 | Servicio | Plan | Costo/mes |
 |----------|------|-----------|
@@ -200,7 +211,7 @@ bash scripts/smoke-test.sh
 
 ---
 
-## 11. Flujo de prueba manual (primer día)
+## 12. Flujo de prueba manual (primer día)
 
 1. **Ir a** `https://folilco.com/reservar`
 2. **Seleccionar** "Cabaña del Bosque"

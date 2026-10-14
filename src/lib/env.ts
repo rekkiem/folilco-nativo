@@ -15,7 +15,7 @@ const SERVER_ENV: EnvSchema[] = [
   { key: "NEXT_PUBLIC_SUPABASE_ANON_KEY", required: true, secret: true },
   { key: "SUPABASE_SERVICE_ROLE_KEY", required: true, secret: true },
   { key: "MERCADOPAGO_ACCESS_TOKEN", required: true, secret: true },
-  { key: "MERCADOPAGO_WEBHOOK_SECRET", required: false, secret: true },
+  { key: "MERCADOPAGO_WEBHOOK_SECRET", required: true, secret: true },
   { key: "TWILIO_ACCOUNT_SID", required: false, secret: true },
   { key: "TWILIO_AUTH_TOKEN", required: false, secret: true },
   { key: "TWILIO_WHATSAPP_FROM", required: false },
@@ -26,18 +26,17 @@ const SERVER_ENV: EnvSchema[] = [
   { key: "ADMIN_PASSWORD", required: true, secret: true },
   { key: "JWT_SECRET", required: true, secret: true },
   { key: "NEXT_PUBLIC_BASE_URL", required: true },
-  { key: "CRON_SECRET", required: false, secret: true },
+  { key: "CRON_SECRET", required: true, secret: true },
 ];
 
 export function validateEnv(): { valid: boolean; missing: string[]; warnings: string[] } {
-  const isProd = process.env.NODE_ENV === "production";
   const missing: string[] = [];
   const warnings: string[] = [];
 
   for (const schema of SERVER_ENV) {
     const value = process.env[schema.key];
     if (!value) {
-      if (schema.required || isProd) {
+      if (schema.required) {
         missing.push(schema.key);
       } else {
         warnings.push(`${schema.key} no configurado (funcionalidad opcional deshabilitada)`);

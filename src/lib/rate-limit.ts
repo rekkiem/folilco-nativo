@@ -1,8 +1,8 @@
 /**
- * Rate limiter en memoria con TTL.
- * Para producción con alta carga usar Upstash Redis.
- * En Vercel serverless cada instancia tiene su propio store
- * (suficiente para el volumen esperado del MVP).
+ * Rate limiter local de mejor esfuerzo.
+ * En Vercel cada instancia tiene su propio store: NO es una barrera
+ * distribuida y no debe ser la única defensa en producción.
+ * Para límites consistentes usar Redis/Upstash o protección de plataforma.
  */
 
 interface RateLimitEntry {
@@ -36,6 +36,11 @@ export function rateLimit(options: RateLimitOptions) {
     let entry = store.get(identifier);
 
     if (!entry || entry.resetAt < now) {
+      if (store.size > 5_000) {
+        for (const [key, value] of store.entries()) {
+          if (value.resetAt < now) store.delete(key);
+        }
+      }
       entry = { count: 0, resetAt: now + options.windowMs };
       store.set(identifier, entry);
     }
