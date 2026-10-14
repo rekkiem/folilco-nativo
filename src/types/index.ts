@@ -55,8 +55,8 @@ export interface Reserva {
   wa_recordatorio_sent: boolean;
   wa_resena_sent: boolean;
   sheets_synced: boolean;
-  agenda_synced: boolean;
-  expires_at: string | null;
+  agenda_synced?: boolean;
+  expires_at?: string | null;
   origen: string;
   created_at: string;
   updated_at: string;
