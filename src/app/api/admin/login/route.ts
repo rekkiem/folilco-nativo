@@ -40,19 +40,23 @@ export async function POST(req: NextRequest) {
   }
 
   if (!verificarCredenciales(username, password)) {
-    logger.warn("[Admin Login] Credenciales incorrectas", { ip, username });
+    logger.warn("[Admin Login] Credenciales incorrectas", { ip });
     return NextResponse.json(
       { error: "Credenciales incorrectas" },
       { status: 401 }
     );
   }
 
-  const token = await firmarToken({ username, rol: "admin" });
-  const response = NextResponse.json({ success: true, username });
-  setSessionCookie(response, token);
-
-  logger.info("[Admin Login] Acceso concedido", { username, ip });
-  return response;
+  try {
+    const token = await firmarToken({ username, rol: "admin" });
+    const response = NextResponse.json({ success: true, username });
+    setSessionCookie(response, token);
+    logger.info("[Admin Login] Acceso concedido", { ip });
+    return response;
+  } catch (err) {
+    logger.error("[Admin Login] No se pudo crear la sesión", err);
+    return NextResponse.json({ error: "Autenticación no disponible" }, { status: 500 });
+  }
 }
 
 export async function DELETE(_req: NextRequest) {
