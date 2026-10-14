@@ -74,40 +74,39 @@ export async function POST(req: NextRequest) {
 
     // 3. Actualizar estado según el pago
     if (pago.status === "approved") {
-      // Evitar procesar duplicados
-      if (reserva.estado === "confirmada") {
-        logger.info(`[Webhook MP] Reserva ${reserva.numero} ya estaba confirmada, skip`);
-        return NextResponse.json({ received: true });
+      // Los webhooks son al menos una vez: no repetir la transición, pero sí
+      // reintentar efectos secundarios que aún no estén marcados como completos.
+      if (reserva.estado !== "confirmada") {
+        const { error: updateError } = await supabaseAdmin
+          .from("reservas")
+          .update({
+            estado: "confirmada",
+            mp_payment_id: paymentId,
+            mp_payment_status: pago.status,
+          })
+          .eq("id", reserva.id);
+        if (updateError) throw updateError;
       }
 
-      // Confirmar la reserva
-      await supabaseAdmin
+      // Leer flags frescos para que un webhook repetido pueda reparar efectos pendientes.
+      const { data: reservaActualizada, error: fetchError } = await supabaseAdmin
         .from("reservas")
-        .update({
-          estado: "confirmada",
-          mp_payment_id: paymentId,
-          mp_payment_status: pago.status,
-        })
-        .eq("id", reserva.id);
-
-      // Re-fetch la reserva actualizada
-      const { data: reservaActualizada } = await supabaseAdmin
-        .from("reservas")
-        .select("*")
+        .select("*, productos(*)")
         .eq("id", reserva.id)
         .single();
+      if (fetchError) throw fetchError;
 
       if (!reservaActualizada) {
         logger.error("[Webhook MP] Error refetching reserva actualizada");
         return NextResponse.json({ received: true });
       }
 
-      const producto = reserva.productos;
+      const producto = reservaActualizada.productos;
 
       // 4. Disparar efectos secundarios en paralelo
       const [waResult, sheetsResult, agendaResult] = await Promise.allSettled([
         // WhatsApp de confirmación (solo si no se envió antes)
-        !reserva.wa_confirmacion_sent
+        !reservaActualizada.wa_confirmacion_sent
           ? enviarWhatsApp("confirmacion", reservaActualizada, producto).then(
               async (res) => {
                 if (res.success) {
@@ -125,7 +124,7 @@ export async function POST(req: NextRequest) {
           : Promise.resolve({ success: true, skip: true }),
 
         // Google Sheets: agregar fila de reserva
-        !reserva.sheets_synced
+        !reservaActualizada.sheets_synced
           ? agregarFilaReserva(reservaActualizada, producto).then(async (res) => {
               if (res.success) {
                 await supabaseAdmin
@@ -171,7 +170,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true });
   } catch (err) {
     logger.error("[Webhook MP] Error procesando webhook:", err);
-    // Retornar 200 para que MercadoPago no reintente (los reintentos los manejamos nosotros)
-    return NextResponse.json({ received: true });
+    // 5xx permite al proveedor reintentar; el procesamiento es idempotente.
+    return NextResponse.json({ error: "Error temporal procesando el pago" }, { status: 500 });
   }
 }
