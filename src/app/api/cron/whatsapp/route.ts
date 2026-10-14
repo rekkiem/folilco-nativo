@@ -5,7 +5,7 @@ import { addDays, subDays, format } from "date-fns";
 import { logger } from "@/lib/logger";
 
 // ============================================================
-// Cron Job: se ejecuta cada hora desde Vercel Cron
+// Cron Job: se ejecuta diariamente desde Vercel Cron
 // Configurado en vercel.json
 // Envía:
 //   1. Recordatorio 24h antes del check-in (upsell)
