@@ -3,7 +3,19 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? "dev-secret-change-in-prod");
+function getJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("JWT_SECRET no configurado");
+    }
+    return new TextEncoder().encode("dev-secret-change-in-prod");
+  }
+  if (process.env.NODE_ENV === "production" && secret.length < 32) {
+    throw new Error("JWT_SECRET debe tener al menos 32 caracteres en producción");
+  }
+  return new TextEncoder().encode(secret);
+}
 export const COOKIE_NAME = "folilco_admin_token";
 
 export interface AdminPayload {
@@ -17,7 +29,7 @@ export async function firmarToken(payload: AdminPayload): Promise<string> {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("8h")
-    .sign(JWT_SECRET);
+    .sign(getJwtSecret());
 }
 
 // Alias semántico
@@ -26,7 +38,7 @@ export const crearToken = firmarToken;
 // ── Verificar token ───────────────────────────────────────────
 export async function verificarToken(token: string): Promise<AdminPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
+    const { payload } = await jwtVerify(token, getJwtSecret());
     return payload as unknown as AdminPayload;
   } catch {
     return null;
