@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Crear preferencia de pago en MercadoPago
-    let mpPref;
+    let mpPref: Awaited<ReturnType<typeof crearPreferenciaPago>>;
     try {
       mpPref = await crearPreferenciaPago(reserva, producto, externalRef);
     } catch (paymentError) {
