@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
 
     // 5. Insertar extras
     if (extrasData.length > 0) {
-      await supabaseAdmin.from("reserva_extras").insert(
+      const { error: extrasError } = await supabaseAdmin.from("reserva_extras").insert(
         extrasData.map((e) => ({
           reserva_id: reserva.id,
           producto_id: e.producto_id,
@@ -160,6 +160,11 @@ export async function POST(req: NextRequest) {
           subtotal_clp: e.precio * e.cantidad,
         }))
       );
+      if (extrasError) {
+        await supabaseAdmin.from("reservas").update({ estado: "cancelada" }).eq("id", reserva.id);
+        logger.error("[API reservations] Error guardando extras:", extrasError);
+        return NextResponse.json({ error: "No se pudieron guardar los extras. Intenta nuevamente." }, { status: 500 });
+      }
     }
 
     // 6. Crear preferencia de pago en MercadoPago
