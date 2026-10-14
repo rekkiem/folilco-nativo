@@ -14,8 +14,9 @@ import { logger } from "@/lib/logger";
 
 export async function GET(req: NextRequest) {
   // Verificar que la llamada viene del cron de Vercel
+  const cronSecret = process.env.CRON_SECRET;
   const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!cronSecret || !authHeader || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
@@ -79,12 +80,6 @@ export async function GET(req: NextRequest) {
     let resenasErrores = 0;
 
     for (const reserva of resenas ?? []) {
-      // Marcar como completada antes de enviar
-      await supabaseAdmin
-        .from("reservas")
-        .update({ estado: "completada" })
-        .eq("id", reserva.id);
-
       const res = await enviarWhatsApp("resena", reserva, reserva.productos);
       if (res.success) {
         await supabaseAdmin
@@ -93,6 +88,10 @@ export async function GET(req: NextRequest) {
             wa_resena_sent: true,
             wa_resena_sent_at: new Date().toISOString(),
           })
+          .eq("id", reserva.id);
+        await supabaseAdmin
+          .from("reservas")
+          .update({ estado: "completada" })
           .eq("id", reserva.id);
         resenasEnviadas++;
       } else {
