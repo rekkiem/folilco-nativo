@@ -2,7 +2,8 @@
 -- Aplicar en Supabase SQL Editor antes de desplegar el código de esta rama.
 
 ALTER TABLE public.reservas
-  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS agenda_synced BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Las reservas pendientes antiguas también deben dejar de bloquear fechas.
 UPDATE public.reservas
