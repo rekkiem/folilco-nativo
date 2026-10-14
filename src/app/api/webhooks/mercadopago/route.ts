@@ -68,8 +68,8 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (reservaErr || !reserva) {
-      logger.warn(`[Webhook MP] Reserva no encontrada para ref: ${pago.external_reference}`);
-      return NextResponse.json({ received: true });
+      logger.error(`[Webhook MP] Reserva no encontrada para ref: ${pago.external_reference}`, reservaErr);
+      return NextResponse.json({ error: "Reserva aún no disponible para procesar" }, { status: 500 });
     }
 
     // 3. Actualizar estado según el pago
@@ -104,11 +104,18 @@ export async function POST(req: NextRequest) {
       }
 
       const producto = reservaActualizada.productos;
+      const whatsappConfigured = Boolean(
+        process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_WHATSAPP_FROM
+      );
+      const sheetsConfigured = Boolean(
+        process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY && process.env.GOOGLE_SPREADSHEET_ID
+      );
 
-      // 4. Disparar efectos secundarios en paralelo
+      // 4. Disparar efectos secundarios en paralelo; integraciones opcionales sin configurar se omiten.
+
       const [waResult, sheetsResult, agendaResult] = await Promise.allSettled([
         // WhatsApp de confirmación (solo si no se envió antes)
-        !reservaActualizada.wa_confirmacion_sent
+        whatsappConfigured && !reservaActualizada.wa_confirmacion_sent
           ? enviarWhatsApp("confirmacion", reservaActualizada, producto).then(
               async (res) => {
                 if (res.success) {
@@ -127,7 +134,7 @@ export async function POST(req: NextRequest) {
           : Promise.resolve({ success: true, skip: true }),
 
         // Google Sheets: agregar fila de reserva
-        !reservaActualizada.sheets_synced
+        sheetsConfigured && !reservaActualizada.sheets_synced
           ? agregarFilaReserva(reservaActualizada, producto).then(async (res) => {
               if (res.success) {
                 const { error } = await supabaseAdmin
@@ -141,7 +148,7 @@ export async function POST(req: NextRequest) {
           : Promise.resolve({ success: true, skip: true }),
 
         // Google Sheets: marcar agenda ocupada una sola vez y reintentar si falla
-        !reservaActualizada.agenda_synced
+        sheetsConfigured && !reservaActualizada.agenda_synced
           ? marcarAgendaOcupada(reservaActualizada).then(async (res) => {
               if (res.success) {
                 const { error } = await supabaseAdmin.from("reservas").update({ agenda_synced: true }).eq("id", reserva.id);
@@ -166,7 +173,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Pago registrado; faltan sincronizaciones que se reintentarán" }, { status: 500 });
       }
     } else if (pago.status === "rejected" || pago.status === "cancelled") {
-      await supabaseAdmin
+      const { error: cancelError } = await supabaseAdmin
         .from("reservas")
         .update({
           estado: "cancelada",
@@ -174,17 +181,19 @@ export async function POST(req: NextRequest) {
           mp_payment_status: pago.status,
         })
         .eq("id", reserva.id);
+      if (cancelError) throw cancelError;
 
       logger.info(`[Webhook MP] Reserva ${reserva.numero} cancelada/rechazada`);
     } else {
       // Pago pendiente: actualizar estado del pago sin cambiar estado de reserva
-      await supabaseAdmin
+      const { error: pendingPaymentError } = await supabaseAdmin
         .from("reservas")
         .update({
           mp_payment_id: paymentId,
           mp_payment_status: pago.status,
         })
         .eq("id", reserva.id);
+      if (pendingPaymentError) throw pendingPaymentError;
     }
 
     return NextResponse.json({ received: true });
