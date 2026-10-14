@@ -76,16 +76,18 @@ export async function POST(req: NextRequest) {
     if (pago.status === "approved") {
       // Los webhooks son al menos una vez: no repetir la transición, pero sí
       // reintentar efectos secundarios que aún no estén marcados como completos.
-      if (reserva.estado !== "confirmada") {
-        const { error: updateError } = await supabaseAdmin
-          .from("reservas")
-          .update({
-            estado: "confirmada",
-            mp_payment_id: paymentId,
-            mp_payment_status: pago.status,
-          })
-          .eq("id", reserva.id);
-        if (updateError) throw updateError;
+      const { data: paymentAccepted, error: confirmationError } = await supabaseAdmin.rpc(
+        "confirmar_reserva_pagada",
+        { p_reserva_id: reserva.id, p_payment_id: paymentId, p_payment_status: pago.status }
+      );
+      if (confirmationError) throw confirmationError;
+      if (paymentAccepted !== true) {
+        logger.error("[Webhook MP] Pago aprobado para reserva expirada o con conflicto; requiere revisión manual", {
+          reserva: reserva.numero,
+          paymentId,
+        });
+        // No reabrir ni sobre-vender: conciliación/reembolso manual fuera del webhook.
+        return NextResponse.json({ received: true, needs_manual_review: true });
       }
 
       // Leer flags frescos para que un webhook repetido pueda reparar efectos pendientes.
