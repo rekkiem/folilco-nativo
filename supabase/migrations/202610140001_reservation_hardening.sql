@@ -111,17 +111,23 @@ SET search_path = public
 AS $$
 DECLARE
   v_reserva public.reservas;
+  v_producto_id UUID;
 BEGIN
-  SELECT * INTO v_reserva
+  SELECT producto_id INTO v_producto_id
   FROM public.reservas
-  WHERE id = p_reserva_id
-  FOR UPDATE;
+  WHERE id = p_reserva_id;
 
   IF NOT FOUND THEN
     RETURN FALSE;
   END IF;
 
-  PERFORM pg_advisory_xact_lock(hashtextextended(v_reserva.producto_id::TEXT, 0));
+  -- Mantener el mismo orden de locks que crear_reserva_atomica.
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_producto_id::TEXT, 0));
+
+  SELECT * INTO v_reserva
+  FROM public.reservas
+  WHERE id = p_reserva_id
+  FOR UPDATE;
 
   IF v_reserva.estado = 'confirmada' THEN
     UPDATE public.reservas
