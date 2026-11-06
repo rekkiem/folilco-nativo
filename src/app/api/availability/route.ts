@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { reservaLimiter, getClientIP } from "@/lib/rate-limit";
+import { availabilityLimiter, getClientIP, rateLimitHeaders } from "@/lib/rate-limit";
+import { calcularPrecio } from "@/lib/pricing";
+import { isSupabaseConfigured, allowDemoMode } from "@/lib/env";
 import { z } from "zod";
 import { eachDayOfInterval, parseISO, format, isBefore, addDays } from "date-fns";
 import { logger } from "@/lib/logger";
@@ -9,28 +11,28 @@ const schema = z.object({
   producto_id: z.string().uuid(),
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   fecha_fin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  cantidad_personas: z.coerce.number().int().min(1).max(20).optional(),
 });
 
-const DEMO_PRODUCTS: Record<string, { precio_clp: number; tipo: string }> = {
-  "00000000-0000-0000-0000-000000000001": { precio_clp: 85000, tipo: "alojamiento" },
-  "00000000-0000-0000-0000-000000000002": { precio_clp: 120000, tipo: "alojamiento" },
-  "00000000-0000-0000-0000-000000000003": { precio_clp: 150000, tipo: "alojamiento" },
-  "00000000-0000-0000-0000-000000000004": { precio_clp: 35000, tipo: "experiencia" },
-  "00000000-0000-0000-0000-000000000005": { precio_clp: 28000, tipo: "experiencia" },
-  "00000000-0000-0000-0000-000000000006": { precio_clp: 9500, tipo: "producto" },
-  "00000000-0000-0000-0000-000000000007": { precio_clp: 6500, tipo: "producto" },
+const DEMO_PRODUCTS: Record<
+  string,
+  { precio_clp: number; tipo: "alojamiento" | "experiencia" | "producto"; capacidad: number }
+> = {
+  "00000000-0000-0000-0000-000000000001": { precio_clp: 85000, tipo: "alojamiento", capacidad: 2 },
+  "00000000-0000-0000-0000-000000000002": { precio_clp: 120000, tipo: "alojamiento", capacidad: 2 },
+  "00000000-0000-0000-0000-000000000003": { precio_clp: 150000, tipo: "alojamiento", capacidad: 5 },
+  "00000000-0000-0000-0000-000000000004": { precio_clp: 35000, tipo: "experiencia", capacidad: 10 },
+  "00000000-0000-0000-0000-000000000005": { precio_clp: 28000, tipo: "experiencia", capacidad: 8 },
+  "00000000-0000-0000-0000-000000000006": { precio_clp: 9500, tipo: "producto", capacidad: 1 },
+  "00000000-0000-0000-0000-000000000007": { precio_clp: 6500, tipo: "producto", capacidad: 1 },
 };
 
-function isSupabaseConfigured(): boolean {
-  return !!(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_URL !== "https://tu-proyecto.supabase.co" &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY !== "tu-service-role-key-privada"
-  );
-}
-
-function demoAvailability(productoId: string, inicio: Date, fin: Date) {
+function demoAvailability(
+  productoId: string,
+  inicio: Date,
+  fin: Date,
+  personas: number
+) {
   const producto = DEMO_PRODUCTS[productoId];
   if (!producto) {
     return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
@@ -40,14 +42,21 @@ function demoAvailability(productoId: string, inicio: Date, fin: Date) {
     1,
     Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24))
   );
-  const unidades = producto.tipo === "alojamiento" ? noches : 1;
+
+  const precio = calcularPrecio({
+    tipo: producto.tipo,
+    precio_clp: producto.precio_clp,
+    noches,
+    personas,
+  });
 
   return NextResponse.json(
     {
       disponible: true,
-      noches,
-      precio_total_clp: producto.precio_clp * unidades,
+      noches: precio.noches,
+      precio_total_clp: precio.total_clp,
       precio_por_noche: producto.precio_clp,
+      desglose: precio.desglose,
       conflictos: [],
     },
     { headers: { "X-Data-Source": "demo" } }
@@ -57,21 +66,20 @@ function demoAvailability(productoId: string, inicio: Date, fin: Date) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
-  // Rate limit
   const ip = getClientIP(req);
-  const rl = reservaLimiter(ip);
+  const rl = availabilityLimiter(ip);
   if (!rl.allowed) {
     return NextResponse.json(
       { error: "Demasiadas solicitudes. Intenta en un momento." },
-      { status: 429 }
+      { status: 429, headers: rateLimitHeaders(rl.remaining, rl.resetAt) }
     );
   }
 
-  // Validar parámetros
   const parse = schema.safeParse({
     producto_id: searchParams.get("producto_id"),
     fecha_inicio: searchParams.get("fecha_inicio"),
     fecha_fin: searchParams.get("fecha_fin"),
+    cantidad_personas: searchParams.get("cantidad_personas") ?? "1",
   });
 
   if (!parse.success) {
@@ -81,9 +89,9 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const { producto_id, fecha_inicio, fecha_fin } = parse.data;
+  const { producto_id, fecha_inicio, fecha_fin, cantidad_personas } = parse.data;
+  const personas = cantidad_personas ?? 1;
 
-  // Validar lógica de fechas
   const inicio = parseISO(fecha_inicio);
   const fin = parseISO(fecha_fin);
   const hoy = new Date();
@@ -102,36 +110,46 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  if (!isSupabaseConfigured() || DEMO_PRODUCTS[producto_id]) {
-    return demoAvailability(producto_id, inicio, fin);
+  if (!isSupabaseConfigured()) {
+    if (allowDemoMode()) {
+      return demoAvailability(producto_id, inicio, fin, personas);
+    }
+    return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+  }
+
+  if (allowDemoMode() && DEMO_PRODUCTS[producto_id]) {
+    return demoAvailability(producto_id, inicio, fin, personas);
   }
 
   try {
-    // 1. Verificar que el producto existe y está activo
     const { data: producto, error: prodError } = await supabaseAdmin
       .from("productos")
-      .select("id, nombre, precio_clp, activo, duracion_noches")
+      .select("id, nombre, precio_clp, tipo, capacidad, activo")
       .eq("id", producto_id)
       .eq("activo", true)
       .single();
 
     if (prodError || !producto) {
-      return NextResponse.json(
-        { error: "Producto no encontrado" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
     }
 
-    // 2. Buscar reservas que se solapen (confirmadas)
+    const ahoraIso = new Date().toISOString();
     const { data: reservas } = await supabaseAdmin
       .from("reservas")
-      .select("fecha_inicio, fecha_fin")
+      .select("fecha_inicio, fecha_fin, estado, expira_at")
       .eq("producto_id", producto_id)
       .in("estado", ["confirmada", "pendiente"])
       .lt("fecha_inicio", fecha_fin)
       .gt("fecha_fin", fecha_inicio);
 
-    // 3. Buscar bloqueos manuales que se solapen
+    const activas = (reservas ?? []).filter((r) => {
+      if (r.estado === "confirmada") return true;
+      if (r.estado === "pendiente" && r.expira_at) {
+        return new Date(r.expira_at) > new Date(ahoraIso);
+      }
+      return false;
+    });
+
     const { data: bloqueos } = await supabaseAdmin
       .from("bloqueos")
       .select("fecha_inicio, fecha_fin")
@@ -140,40 +158,36 @@ export async function GET(req: NextRequest) {
       .gt("fecha_fin", fecha_inicio);
 
     const conflictos = [
-      ...(reservas ?? []),
-      ...(bloqueos ?? []),
+      ...activas.map((c) => `${c.fecha_inicio} → ${c.fecha_fin}`),
+      ...(bloqueos ?? []).map((c) => `${c.fecha_inicio} → ${c.fecha_fin}`),
     ];
 
     const disponible = conflictos.length === 0;
-
-    // Calcular precio
     const noches = Math.round(
       (fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)
     );
-    const precio_total_clp = producto.precio_clp * noches;
+
+    const precio = calcularPrecio({
+      tipo: producto.tipo,
+      precio_clp: producto.precio_clp,
+      noches,
+      personas,
+    });
 
     return NextResponse.json({
       disponible,
-      noches,
-      precio_total_clp,
+      noches: precio.noches,
+      precio_total_clp: precio.total_clp,
       precio_por_noche: producto.precio_clp,
-      conflictos: disponible
-        ? []
-        : conflictos.map((c) => `${c.fecha_inicio} → ${c.fecha_fin}`),
+      desglose: precio.desglose,
+      conflictos: disponible ? [] : conflictos,
     });
   } catch (err) {
     logger.error("[API availability] Error:", err);
-    return NextResponse.json(
-      { error: "Error interno del servidor" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 }
 
-// ============================================================
-// GET /api/availability/calendar?producto_id=xxx&mes=2024-12
-// Devuelve todas las fechas bloqueadas del mes para el calendario
-// ============================================================
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -183,32 +197,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Faltan parámetros" }, { status: 400 });
     }
 
-    if (!isSupabaseConfigured() || DEMO_PRODUCTS[producto_id]) {
+    if (!isSupabaseConfigured() || (allowDemoMode() && DEMO_PRODUCTS[producto_id])) {
       return NextResponse.json(
-        {
-          producto_id,
-          mes,
-          fechas_bloqueadas: [],
-        },
+        { producto_id, mes, fechas_bloqueadas: [] },
         { headers: { "X-Data-Source": "demo" } }
       );
     }
 
-    // mes = YYYY-MM, calcular rango
     const inicioMes = parseISO(`${mes}-01`);
     const finMes = new Date(inicioMes.getFullYear(), inicioMes.getMonth() + 2, 0);
     const finMesStr = format(finMes, "yyyy-MM-dd");
 
-    // Reservas confirmadas
     const { data: reservas } = await supabaseAdmin
       .from("reservas")
-      .select("fecha_inicio, fecha_fin")
+      .select("fecha_inicio, fecha_fin, estado, expira_at")
       .eq("producto_id", producto_id)
       .in("estado", ["confirmada", "pendiente"])
       .lt("fecha_inicio", finMesStr)
       .gte("fecha_fin", `${mes}-01`);
 
-    // Bloqueos manuales
+    const ahora = new Date();
+    const activas = (reservas ?? []).filter((r) => {
+      if (r.estado === "confirmada") return true;
+      if (r.estado === "pendiente" && r.expira_at) {
+        return new Date(r.expira_at) > ahora;
+      }
+      return false;
+    });
+
     const { data: bloqueos } = await supabaseAdmin
       .from("bloqueos")
       .select("fecha_inicio, fecha_fin")
@@ -216,14 +232,13 @@ export async function POST(req: NextRequest) {
       .lt("fecha_inicio", finMesStr)
       .gte("fecha_fin", `${mes}-01`);
 
-    // Expandir rangos a días individuales
     const fechasBloqueadas = new Set<string>();
-    const todos = [...(reservas ?? []), ...(bloqueos ?? [])];
+    const todos = [...activas, ...(bloqueos ?? [])];
 
     for (const r of todos) {
       const dias = eachDayOfInterval({
         start: parseISO(r.fecha_inicio),
-        end: addDays(parseISO(r.fecha_fin), -1), // fin exclusivo en reservas
+        end: addDays(parseISO(r.fecha_fin), -1),
       });
       dias.forEach((d) => fechasBloqueadas.add(format(d, "yyyy-MM-dd")));
     }
