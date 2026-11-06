@@ -3,7 +3,7 @@
  * Pruebas de validación de variables de entorno.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect } from "@jest/globals";
 import { validateEnv, requireEnv } from "@/lib/env";
 
 describe("validateEnv()", () => {
@@ -13,27 +13,52 @@ describe("validateEnv()", () => {
     expect(missing).toHaveLength(0);
   });
 
-  it("detecta variables faltantes", () => {
-    const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  it("en development/test: variables faltantes van a warnings, no invalidan",
+    () => {
+      const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const originalEnv = process.env.NODE_ENV;
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      process.env.NODE_ENV = "test";
 
-    const { valid, missing } = validateEnv();
-    expect(valid).toBe(false);
-    expect(missing).toContain("NEXT_PUBLIC_SUPABASE_URL");
+      const { valid, missing, warnings } = validateEnv();
+      expect(valid).toBe(true);
+      expect(missing).toHaveLength(0);
+      expect(warnings.some((w) => w.includes("NEXT_PUBLIC_SUPABASE_URL"))).toBe(
+        true
+      );
 
-    process.env.NEXT_PUBLIC_SUPABASE_URL = originalUrl;
-  });
+      process.env.NEXT_PUBLIC_SUPABASE_URL = originalUrl;
+      process.env.NODE_ENV = originalEnv;
+    }
+  );
 
-  it("emite warnings para variables opcionales no configuradas", () => {
-    const originalGoogle = process.env.GOOGLE_SPREADSHEET_ID;
-    delete process.env.GOOGLE_SPREADSHEET_ID;
+  it("en production: variables faltantes invalidan",
+    () => {
+      const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const originalEnv = process.env.NODE_ENV;
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      process.env.NODE_ENV = "production";
 
-    const { warnings } = validateEnv();
-    // Puede tener warnings de otras vars opcionales también
-    expect(Array.isArray(warnings)).toBe(true);
+      const { valid, missing } = validateEnv();
+      expect(valid).toBe(false);
+      expect(missing).toContain("NEXT_PUBLIC_SUPABASE_URL");
 
-    process.env.GOOGLE_SPREADSHEET_ID = originalGoogle;
-  });
+      process.env.NEXT_PUBLIC_SUPABASE_URL = originalUrl;
+      process.env.NODE_ENV = originalEnv;
+    }
+  );
+
+  it("emite warnings como array",
+    () => {
+      const originalGoogle = process.env.GOOGLE_SPREADSHEET_ID;
+      delete process.env.GOOGLE_SPREADSHEET_ID;
+
+      const { warnings } = validateEnv();
+      expect(Array.isArray(warnings)).toBe(true);
+
+      process.env.GOOGLE_SPREADSHEET_ID = originalGoogle;
+    }
+  );
 });
 
 describe("requireEnv()", () => {
