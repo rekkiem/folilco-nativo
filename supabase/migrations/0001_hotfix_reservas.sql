@@ -141,23 +141,23 @@ BEGIN
 END;
 $$;
 
--- 6. Job pg_cron (si disponible)
-DO $$
+-- 6. Job pg_cron opcional (etiquetas $cron$/$job$ para no romper $$ anidados)
+DO $cron$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-    PERFORM cron.unschedule('expirar-holds') WHERE EXISTS (
-      SELECT 1 FROM cron.job WHERE jobname = 'expirar-holds'
-    );
+    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'expirar-holds') THEN
+      PERFORM cron.unschedule('expirar-holds');
+    END IF;
     PERFORM cron.schedule(
       'expirar-holds',
       '*/5 * * * *',
-      $$UPDATE reservas SET estado = 'expirada', updated_at = NOW()
-         WHERE estado = 'pendiente' AND expira_at IS NOT NULL AND expira_at < NOW()$$
+      $job$UPDATE reservas SET estado = 'expirada', updated_at = NOW()
+         WHERE estado = 'pendiente' AND expira_at IS NOT NULL AND expira_at < NOW()$job$
     );
   END IF;
 EXCEPTION WHEN OTHERS THEN
-  RAISE NOTICE 'pg_cron no disponible: %', SQLERRM;
-END $$;
+  RAISE NOTICE 'pg_cron no disponible o error al programar: %', SQLERRM;
+END $cron$;
 
 -- 7. Token ICS
 ALTER TABLE productos
