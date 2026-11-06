@@ -1,16 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/auth";
+import { isSupabaseConfigured, allowDemoMode } from "@/lib/env";
 
 export async function GET(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth instanceof NextResponse) return auth;
 
   const { searchParams } = new URL(req.url);
+  const page = parseInt(searchParams.get("page") ?? "1");
+
+  if (!isSupabaseConfigured()) {
+    if (allowDemoMode()) {
+      return NextResponse.json(
+        {
+          reservas: [],
+          total: 0,
+          page,
+          pages: 0,
+          demo: true,
+          message: "Modo demo: sin Supabase no hay reservas persistidas.",
+        },
+        { headers: { "X-Data-Source": "demo" } }
+      );
+    }
+    return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+  }
+
   const estado = searchParams.get("estado");
   const desde = searchParams.get("desde");
   const hasta = searchParams.get("hasta");
-  const page = parseInt(searchParams.get("page") ?? "1");
   const limit = 20;
   const offset = (page - 1) * limit;
 
@@ -41,6 +60,13 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth instanceof NextResponse) return auth;
+
+  if (!isSupabaseConfigured()) {
+    if (allowDemoMode()) {
+      return NextResponse.json({ ok: true, demo: true });
+    }
+    return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+  }
 
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
