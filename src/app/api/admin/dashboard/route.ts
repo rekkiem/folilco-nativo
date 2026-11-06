@@ -1,16 +1,58 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/auth";
+import { isSupabaseConfigured, allowDemoMode } from "@/lib/env";
 import { startOfMonth, endOfMonth, subMonths, format } from "date-fns";
 import { logger } from "@/lib/logger";
 
+function emptyDashboard(mesStr: string) {
+  const mesInicio = startOfMonth(new Date(`${mesStr}-01`));
+  const mesFin = endOfMonth(mesInicio);
+  const mesInicioStr = format(mesInicio, "yyyy-MM-dd");
+  const mesFinalStr = format(mesFin, "yyyy-MM-dd");
+
+  const ocupacion_mensual = Array.from({ length: 6 }, (_, i) => {
+    const fecha = subMonths(mesInicio, 5 - i);
+    return {
+      mes: format(fecha, "MMM yyyy"),
+      reservas: 0,
+      ingresos: 0,
+    };
+  });
+
+  return {
+    periodo: { desde: mesInicioStr, hasta: mesFinalStr },
+    resumen: {
+      total_reservas: 0,
+      reservas_confirmadas: 0,
+      ingresos_clp: 0,
+      comision_clp: 0,
+      tasa_ocupacion: 0,
+    },
+    ingresos_por_linea: { alojamiento: 0, experiencias: 0, productos: 0 },
+    ocupacion_mensual,
+    top_productos: [],
+    stock_alertas: [],
+    reservas_recientes: [],
+    demo: true,
+  };
+}
+
 export async function GET(req: NextRequest) {
-  // Autenticación
   const auth = await requireAdmin(req);
   if (auth instanceof NextResponse) return auth;
 
   const { searchParams } = new URL(req.url);
   const mesStr = searchParams.get("mes") ?? format(new Date(), "yyyy-MM");
+
+  if (!isSupabaseConfigured()) {
+    if (allowDemoMode()) {
+      return NextResponse.json(emptyDashboard(mesStr), {
+        headers: { "X-Data-Source": "demo" },
+      });
+    }
+    return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+  }
 
   try {
     const mesInicio = startOfMonth(new Date(`${mesStr}-01`));
@@ -18,7 +60,6 @@ export async function GET(req: NextRequest) {
     const mesInicioStr = format(mesInicio, "yyyy-MM-dd");
     const mesFinalStr = format(mesFin, "yyyy-MM-dd");
 
-    // ── Reservas del mes ──────────────────────────────────
     const { data: reservasMes } = await supabaseAdmin
       .from("reservas")
       .select("*, productos(tipo, socio_responsable)")
@@ -29,7 +70,6 @@ export async function GET(req: NextRequest) {
 
     const reservasMesData = reservasMes ?? [];
 
-    // ── Totales ───────────────────────────────────────────
     const totalIngresos = reservasMesData.reduce(
       (acc, r) => acc + r.precio_total_clp,
       0
@@ -39,17 +79,16 @@ export async function GET(req: NextRequest) {
       0
     );
 
-    // ── Ingresos por línea ────────────────────────────────
     const ingresosPorLinea = reservasMesData.reduce(
       (acc, r) => {
         const tipo = r.productos?.tipo ?? "alojamiento";
-        acc[tipo as keyof typeof acc] = (acc[tipo as keyof typeof acc] ?? 0) + r.precio_total_clp;
+        acc[tipo as keyof typeof acc] =
+          (acc[tipo as keyof typeof acc] ?? 0) + r.precio_total_clp;
         return acc;
       },
       { alojamiento: 0, experiencias: 0, productos: 0 } as Record<string, number>
     );
 
-    // ── Ocupación últimos 6 meses ─────────────────────────
     const ocupacionMensual = await Promise.all(
       Array.from({ length: 6 }, (_, i) => {
         const fecha = subMonths(mesInicio, 5 - i);
@@ -69,7 +108,6 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    // ── Top 3 productos ───────────────────────────────────
     const conteoProductos = reservasMesData.reduce(
       (acc, r) => {
         const key = r.producto_nombre;
@@ -81,15 +119,16 @@ export async function GET(req: NextRequest) {
       {} as Record<string, { nombre: string; reservas: number; ingresos: number }>
     );
 
-    const topProductos = (Object.values(conteoProductos) as Array<{
-      nombre: string;
-      reservas: number;
-      ingresos: number;
-    }>)
+    const topProductos = (
+      Object.values(conteoProductos) as Array<{
+        nombre: string;
+        reservas: number;
+        ingresos: number;
+      }>
+    )
       .sort((a, b) => b.ingresos - a.ingresos)
       .slice(0, 3);
 
-    // ── Stock bajo ────────────────────────────────────────
     const { data: stockAlertas } = await supabaseAdmin
       .from("productos")
       .select("nombre, stock_actual, stock_minimo")
@@ -98,7 +137,6 @@ export async function GET(req: NextRequest) {
       .not("stock_actual", "is", null)
       .filter("stock_actual", "lte", "stock_minimo");
 
-    // ── Tasa de ocupación (alojamientos, días del mes) ────
     const diasMes = mesFin.getDate();
     const alojamientos = await supabaseAdmin
       .from("productos")
@@ -119,7 +157,8 @@ export async function GET(req: NextRequest) {
       periodo: { desde: mesInicioStr, hasta: mesFinalStr },
       resumen: {
         total_reservas: reservasMesData.length,
-        reservas_confirmadas: reservasMesData.filter((r) => r.estado === "confirmada").length,
+        reservas_confirmadas: reservasMesData.filter((r) => r.estado === "confirmada")
+          .length,
         ingresos_clp: totalIngresos,
         comision_clp: totalComision,
         tasa_ocupacion: tasaOcupacion,
