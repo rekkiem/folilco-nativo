@@ -13,9 +13,23 @@ import { logger } from "@/lib/logger";
 // ============================================================
 
 export async function GET(req: NextRequest) {
-  // Verificar que la llamada viene del cron de Vercel
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  // F0-06 / E-08: exigir CRON_SECRET (falla cerrada) + comparación timing-safe
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    logger.error("[Cron WhatsApp] CRON_SECRET no configurado – rechazando");
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
+  const authHeader = req.headers.get("authorization") ?? "";
+  const expected = `Bearer ${cronSecret}`;
+  try {
+    const { timingSafeEqual } = await import("crypto");
+    const a = Buffer.from(authHeader);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    }
+  } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
@@ -79,7 +93,6 @@ export async function GET(req: NextRequest) {
     let resenasErrores = 0;
 
     for (const reserva of resenas ?? []) {
-      // Marcar como completada antes de enviar
       await supabaseAdmin
         .from("reservas")
         .update({ estado: "completada" })
@@ -108,7 +121,7 @@ export async function GET(req: NextRequest) {
     };
 
     // ============================================================
-    // 3. Verificar stock bajo y enviar alertas por email
+    // 3. Verificar stock bajo
     // ============================================================
     const { data: stockBajo } = await supabaseAdmin
       .from("productos")
@@ -122,8 +135,6 @@ export async function GET(req: NextRequest) {
 
     if (stockBajo && stockBajo.length > 0) {
       logger.warn("[Cron] Productos con stock bajo:", stockBajo);
-      // Aquí se podría enviar email de alerta via SendGrid/Resend
-      // Por ahora solo se registra en logs
     }
 
     logger.info("[Cron WhatsApp] Completado:", resultados);
