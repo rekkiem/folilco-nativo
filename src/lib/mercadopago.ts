@@ -3,26 +3,45 @@ import { createHmac, timingSafeEqual } from "crypto";
 import type { Reserva, Producto } from "@/types";
 import { logger } from "./logger";
 
-const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
-if (!accessToken && process.env.NODE_ENV === "production") {
-  throw new Error("MERCADOPAGO_ACCESS_TOKEN no configurado");
+/**
+ * Clientes lazy: no lanzar en tiempo de import/build.
+ * Next.js "Collecting page data" carga las rutas API; un throw top-level
+ * rompe `next build` si la variable aún no está en el entorno de build.
+ */
+function getAccessToken(): string {
+  const token = process.env.MERCADOPAGO_ACCESS_TOKEN;
+  if (!token) {
+    throw new Error("MERCADOPAGO_ACCESS_TOKEN no configurado");
+  }
+  return token;
 }
 
-const mpClient = new MercadoPagoConfig({
-  accessToken: accessToken ?? "TEST-token",
-  options: { timeout: 5000 },
-});
+function getMpClient() {
+  return new MercadoPagoConfig({
+    accessToken: getAccessToken(),
+    options: { timeout: 5000 },
+  });
+}
 
-const preferenceClient = new Preference(mpClient);
-const paymentClient = new Payment(mpClient);
+function getPreferenceClient() {
+  return new Preference(getMpClient());
+}
+
+function getPaymentClient() {
+  return new Payment(getMpClient());
+}
 
 export async function crearPreferenciaPago(
   reserva: Omit<Reserva, "id" | "numero" | "created_at" | "updated_at" | "noches">,
   producto: Producto,
   externalReference: string
 ) {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL!;
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+  if (!baseUrl) {
+    throw new Error("NEXT_PUBLIC_BASE_URL no configurado");
+  }
 
+  const preferenceClient = getPreferenceClient();
   const preference = await preferenceClient.create({
     body: {
       external_reference: externalReference,
@@ -55,6 +74,7 @@ export async function crearPreferenciaPago(
       notification_url: `${baseUrl}/api/webhooks/mercadopago`,
       expires: true,
       expiration_date_from: new Date().toISOString(),
+      // Alinear con hold de 30 min (F0-02)
       expiration_date_to: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
       statement_descriptor: "FOLILCO NATIVO",
       metadata: {
@@ -72,12 +92,12 @@ export async function crearPreferenciaPago(
 }
 
 export async function obtenerPago(paymentId: string) {
-  return paymentClient.get({ id: Number(paymentId) });
+  return getPaymentClient().get({ id: Number(paymentId) });
 }
 
 /**
  * Verificar firma del webhook de MercadoPago.
- * Usa crypto ES import (no require) para evitar problemas con bundlers.
+ * En producción falla cerrado si falta el secret (F0-07).
  */
 export function verificarFirmaWebhook(
   xSignature: string,
@@ -87,10 +107,15 @@ export function verificarFirmaWebhook(
 ): boolean {
   const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
   if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      logger.error("MERCADOPAGO_WEBHOOK_SECRET no configurado – rechazando webhook en producción");
+      return false;
+    }
     logger.warn("MERCADOPAGO_WEBHOOK_SECRET no configurado – omitiendo verificación en dev");
-    return process.env.NODE_ENV !== "production";
+    return true;
   }
 
+  // Manifest según docs MP: id + request-id + ts
   const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
   const expectedHash = createHmac("sha256", secret).update(manifest).digest("hex");
 
@@ -101,7 +126,6 @@ export function verificarFirmaWebhook(
   const receivedHash = v1Part.split("=")[1];
 
   try {
-    // Los buffers deben tener el mismo length para timingSafeEqual
     const expectedBuf = Buffer.from(expectedHash, "hex");
     const receivedBuf = Buffer.from(receivedHash, "hex");
     if (expectedBuf.length !== receivedBuf.length) return false;
