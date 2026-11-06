@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { logger } from "@/lib/logger";
+import { isSupabaseConfigured, allowDemoMode } from "@/lib/env";
 
 // Datos de fallback para desarrollo sin Supabase configurado
 const DEMO_TIMESTAMP = "2025-01-01T00:00:00.000Z";
@@ -127,21 +128,18 @@ const FALLBACK_PRODUCTS = [
   },
 ];
 
-function isSupabaseConfigured(): boolean {
-  return !!(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_URL !== "https://tu-proyecto.supabase.co" &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY !== "tu-service-role-key-privada"
-  );
-}
-
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const tipo = searchParams.get("tipo");
 
-  // Modo de desarrollo sin Supabase configurado → retornar datos de demo
+  // Demo solo fuera de producción (F0-06 / E-20)
   if (!isSupabaseConfigured()) {
+    if (!allowDemoMode()) {
+      return NextResponse.json(
+        { error: "Catálogo no disponible" },
+        { status: 503 }
+      );
+    }
     logger.warn("[API products] Supabase no configurado – usando datos de demo");
     const filtered = tipo
       ? FALLBACK_PRODUCTS.filter((p) => p.tipo === tipo)
