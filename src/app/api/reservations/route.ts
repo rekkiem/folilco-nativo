@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { crearPreferenciaPago } from "@/lib/mercadopago";
 import { reservaLimiter, getClientIP } from "@/lib/rate-limit";
 import { calcularPrecio, validarCapacidad } from "@/lib/pricing";
+import { isSupabaseConfigured, allowDemoMode } from "@/lib/env";
 import { z } from "zod";
 import { parseISO, isBefore } from "date-fns";
 import { randomUUID } from "crypto";
@@ -27,6 +28,67 @@ const schema = z.object({
     )
     .optional(),
 });
+
+const DEMO_PRODUCTS: Record<
+  string,
+  {
+    id: string;
+    nombre: string;
+    tipo: "alojamiento" | "experiencia" | "producto";
+    precio_clp: number;
+    capacidad: number;
+  }
+> = {
+  "00000000-0000-0000-0000-000000000001": {
+    id: "00000000-0000-0000-0000-000000000001",
+    nombre: "Cabaña del Bosque",
+    tipo: "alojamiento",
+    precio_clp: 85000,
+    capacidad: 2,
+  },
+  "00000000-0000-0000-0000-000000000002": {
+    id: "00000000-0000-0000-0000-000000000002",
+    nombre: "Domo Patagónico",
+    tipo: "alojamiento",
+    precio_clp: 120000,
+    capacidad: 2,
+  },
+  "00000000-0000-0000-0000-000000000003": {
+    id: "00000000-0000-0000-0000-000000000003",
+    nombre: "Cabaña Familiar",
+    tipo: "alojamiento",
+    precio_clp: 150000,
+    capacidad: 5,
+  },
+  "00000000-0000-0000-0000-000000000004": {
+    id: "00000000-0000-0000-0000-000000000004",
+    nombre: "Cabalgata al Volcán",
+    tipo: "experiencia",
+    precio_clp: 35000,
+    capacidad: 10,
+  },
+  "00000000-0000-0000-0000-000000000005": {
+    id: "00000000-0000-0000-0000-000000000005",
+    nombre: "Día de Campo y Ordeña",
+    tipo: "experiencia",
+    precio_clp: 28000,
+    capacidad: 8,
+  },
+  "00000000-0000-0000-0000-000000000006": {
+    id: "00000000-0000-0000-0000-000000000006",
+    nombre: "Miel Artesanal Folilco 500g",
+    tipo: "producto",
+    precio_clp: 9500,
+    capacidad: 1,
+  },
+  "00000000-0000-0000-0000-000000000007": {
+    id: "00000000-0000-0000-0000-000000000007",
+    nombre: "Mermelada de Murta 220g",
+    tipo: "producto",
+    precio_clp: 6500,
+    capacidad: 1,
+  },
+};
 
 export async function POST(req: NextRequest) {
   const ip = getClientIP(req);
@@ -67,6 +129,114 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Fecha de fin debe ser posterior al inicio" }, { status: 400 });
   }
 
+  const noches = Math.max(
+    1,
+    Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24))
+  );
+
+  // ── Modo demo (sin Supabase): permite probar UI local ──
+  if (!isSupabaseConfigured() && allowDemoMode()) {
+    const demo = DEMO_PRODUCTS[data.producto_id];
+    if (!demo) {
+      return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
+    }
+
+    const cap = validarCapacidad(demo.tipo, demo.capacidad, data.cantidad_personas);
+    if (!cap.ok) {
+      return NextResponse.json({ error: cap.mensaje }, { status: 400 });
+    }
+
+    const precioBase = calcularPrecio({
+      tipo: demo.tipo,
+      precio_clp: demo.precio_clp,
+      noches,
+      personas: data.cantidad_personas,
+    });
+
+    let precioTotal = precioBase.total_clp;
+    for (const extra of data.extras ?? []) {
+      const ep = DEMO_PRODUCTS[extra.producto_id];
+      if (ep && ep.tipo !== "alojamiento") {
+        precioTotal += ep.precio_clp * extra.cantidad;
+      }
+    }
+
+    const externalRef = randomUUID();
+    const numero = `DEMO-${externalRef.slice(0, 8).toUpperCase()}`;
+
+    // Sin token MP: devolver respuesta demo clara (no 404)
+    if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
+      logger.warn("[API reservations] Modo demo sin MercadoPago – reserva simulada");
+      return NextResponse.json(
+        {
+          reserva_id: externalRef,
+          numero,
+          mp_preference_id: null,
+          mp_init_point: null,
+          precio_total_clp: precioTotal,
+          noches,
+          desglose: precioBase.desglose,
+          demo: true,
+          message:
+            "Reserva simulada (modo demo). Configura Supabase + MERCADOPAGO_ACCESS_TOKEN para pago real.",
+        },
+        { headers: { "X-Data-Source": "demo" } }
+      );
+    }
+
+    try {
+      const reservaFake = {
+        id: externalRef,
+        numero,
+        huesped_nombre: data.huesped_nombre.trim(),
+        huesped_email: data.huesped_email.toLowerCase().trim(),
+        huesped_telefono: data.huesped_telefono.trim(),
+        fecha_inicio: data.fecha_inicio,
+        fecha_fin: data.fecha_fin,
+        cantidad_personas: data.cantidad_personas,
+        precio_total_clp: precioTotal,
+        estado: "pendiente",
+        origen: "web",
+      };
+
+      const mpPref = await crearPreferenciaPago(
+        reservaFake as never,
+        demo as never,
+        externalRef
+      );
+
+      return NextResponse.json(
+        {
+          reserva_id: externalRef,
+          numero,
+          mp_preference_id: mpPref.preference_id,
+          mp_init_point: mpPref.init_point,
+          precio_total_clp: precioTotal,
+          noches,
+          desglose: precioBase.desglose,
+          demo: true,
+        },
+        { headers: { "X-Data-Source": "demo" } }
+      );
+    } catch (err) {
+      logger.error("[API reservations] Error MP en demo:", err);
+      return NextResponse.json(
+        {
+          error:
+            "No se pudo crear preferencia MercadoPago. Revisa MERCADOPAGO_ACCESS_TOKEN (sandbox).",
+        },
+        { status: 502 }
+      );
+    }
+  }
+
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json(
+      { error: "Servicio de reservas no disponible" },
+      { status: 503 }
+    );
+  }
+
   try {
     const { data: producto, error: prodErr } = await supabaseAdmin
       .from("productos")
@@ -84,7 +254,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: cap.mensaje }, { status: 400 });
     }
 
-    // Solo holds vigentes + confirmadas
     const ahora = new Date().toISOString();
     const { data: conflictos } = await supabaseAdmin
       .from("reservas")
@@ -109,12 +278,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const noches = Math.max(
-      1,
-      Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24))
-    );
-
-    // F0-01: alojamiento = precio × noches (NO × personas)
     const precioBase = calcularPrecio({
       tipo: producto.tipo,
       precio_clp: producto.precio_clp,
@@ -124,7 +287,8 @@ export async function POST(req: NextRequest) {
 
     let precioTotal = precioBase.total_clp;
 
-    const extrasData: { producto_id: string; nombre: string; precio: number; cantidad: number }[] = [];
+    const extrasData: { producto_id: string; nombre: string; precio: number; cantidad: number }[] =
+      [];
     if (data.extras && data.extras.length > 0) {
       const extraIds = data.extras.map((e) => e.producto_id);
       const { data: extrasProds } = await supabaseAdmin
@@ -149,7 +313,6 @@ export async function POST(req: NextRequest) {
 
     const externalRef = randomUUID();
 
-    // Preferir RPC atómica si existe; fallback a insert
     let reserva: Record<string, unknown> | null = null;
     const { data: rpcReserva, error: rpcErr } = await supabaseAdmin.rpc("crear_reserva", {
       p_producto_id: data.producto_id,
@@ -232,11 +395,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const mpPref = await crearPreferenciaPago(
-      reserva as never,
-      producto,
-      externalRef
-    );
+    const mpPref = await crearPreferenciaPago(reserva as never, producto, externalRef);
 
     await supabaseAdmin
       .from("reservas")
@@ -266,9 +425,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Parámetro ref requerido" }, { status: 400 });
   }
 
+  if (!isSupabaseConfigured()) {
+    if (allowDemoMode()) {
+      return NextResponse.json({
+        numero: `DEMO-${ref.slice(0, 8)}`,
+        estado: "pendiente",
+        demo: true,
+      });
+    }
+    return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+  }
+
   const { data: reserva } = await supabaseAdmin
     .from("reservas")
-    .select("numero, estado, huesped_nombre, producto_nombre, fecha_inicio, fecha_fin, precio_total_clp")
+    .select(
+      "numero, estado, huesped_nombre, producto_nombre, fecha_inicio, fecha_fin, precio_total_clp"
+    )
     .eq("mp_external_reference", ref)
     .single();
 
