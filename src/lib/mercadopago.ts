@@ -3,17 +3,33 @@ import { createHmac, timingSafeEqual } from "crypto";
 import type { Reserva, Producto } from "@/types";
 import { logger } from "./logger";
 
+function isPlaceholderToken(value: string | undefined): boolean {
+  if (!value) return true;
+  const v = value.trim();
+  if (!v) return true;
+  return (
+    v.includes("tu-") ||
+    v.includes("cambiar-") ||
+    v === "TEST-token" ||
+    v.startsWith("APP_USR-tu-") ||
+    v.includes("xxxxxxxx")
+  );
+}
+
+/** true solo si hay un access token real (no placeholder). */
+export function isMercadoPagoConfigured(): boolean {
+  return !isPlaceholderToken(process.env.MERCADOPAGO_ACCESS_TOKEN);
+}
+
 /**
  * Clientes lazy: no lanzar en tiempo de import/build.
- * Next.js "Collecting page data" carga las rutas API; un throw top-level
- * rompe `next build` si la variable aún no está en el entorno de build.
  */
 function getAccessToken(): string {
   const token = process.env.MERCADOPAGO_ACCESS_TOKEN;
-  if (!token) {
-    throw new Error("MERCADOPAGO_ACCESS_TOKEN no configurado");
+  if (isPlaceholderToken(token)) {
+    throw new Error("MERCADOPAGO_ACCESS_TOKEN no configurado o es placeholder");
   }
-  return token;
+  return token!.trim();
 }
 
 function getMpClient() {
@@ -37,7 +53,7 @@ export async function crearPreferenciaPago(
   externalReference: string
 ) {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-  if (!baseUrl) {
+  if (!baseUrl || baseUrl.includes("tu-")) {
     throw new Error("NEXT_PUBLIC_BASE_URL no configurado");
   }
 
@@ -74,7 +90,6 @@ export async function crearPreferenciaPago(
       notification_url: `${baseUrl}/api/webhooks/mercadopago`,
       expires: true,
       expiration_date_from: new Date().toISOString(),
-      // Alinear con hold de 30 min (F0-02)
       expiration_date_to: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
       statement_descriptor: "FOLILCO NATIVO",
       metadata: {
@@ -95,10 +110,6 @@ export async function obtenerPago(paymentId: string) {
   return getPaymentClient().get({ id: Number(paymentId) });
 }
 
-/**
- * Verificar firma del webhook de MercadoPago.
- * En producción falla cerrado si falta el secret (F0-07).
- */
 export function verificarFirmaWebhook(
   xSignature: string,
   xRequestId: string,
@@ -106,7 +117,7 @@ export function verificarFirmaWebhook(
   ts: string
 ): boolean {
   const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
-  if (!secret) {
+  if (!secret || isPlaceholderToken(secret)) {
     if (process.env.NODE_ENV === "production") {
       logger.error("MERCADOPAGO_WEBHOOK_SECRET no configurado – rechazando webhook en producción");
       return false;
@@ -115,7 +126,6 @@ export function verificarFirmaWebhook(
     return true;
   }
 
-  // Manifest según docs MP: id + request-id + ts
   const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
   const expectedHash = createHmac("sha256", secret).update(manifest).digest("hex");
 
