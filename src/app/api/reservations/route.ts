@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { crearPreferenciaPago } from "@/lib/mercadopago";
+import { crearPreferenciaPago, isMercadoPagoConfigured } from "@/lib/mercadopago";
 import { reservaLimiter, getClientIP } from "@/lib/rate-limit";
 import { calcularPrecio, validarCapacidad } from "@/lib/pricing";
 import { isSupabaseConfigured, allowDemoMode } from "@/lib/env";
@@ -134,7 +134,6 @@ export async function POST(req: NextRequest) {
     Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24))
   );
 
-  // ── Modo demo (sin Supabase): permite probar UI local ──
   if (!isSupabaseConfigured() && allowDemoMode()) {
     const demo = DEMO_PRODUCTS[data.producto_id];
     if (!demo) {
@@ -164,8 +163,7 @@ export async function POST(req: NextRequest) {
     const externalRef = randomUUID();
     const numero = `DEMO-${externalRef.slice(0, 8).toUpperCase()}`;
 
-    // Sin token MP: devolver respuesta demo clara (no 404)
-    if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
+    if (!isMercadoPagoConfigured()) {
       logger.warn("[API reservations] Modo demo sin MercadoPago – reserva simulada");
       return NextResponse.json(
         {
@@ -210,7 +208,7 @@ export async function POST(req: NextRequest) {
           reserva_id: externalRef,
           numero,
           mp_preference_id: mpPref.preference_id,
-          mp_init_point: mpPref.init_point,
+          mp_init_point: mpPref.init_point ?? mpPref.sandbox_init_point,
           precio_total_clp: precioTotal,
           noches,
           desglose: precioBase.desglose,
@@ -395,22 +393,60 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const mpPref = await crearPreferenciaPago(reserva as never, producto, externalRef);
+    if (!isMercadoPagoConfigured()) {
+      logger.warn("[API reservations] Reserva creada sin preferencia MP (token no configurado)", {
+        reserva_id: reserva.id,
+        numero: reserva.numero,
+      });
+      return NextResponse.json({
+        reserva_id: reserva.id,
+        numero: reserva.numero,
+        mp_preference_id: null,
+        mp_init_point: null,
+        precio_total_clp: precioTotal,
+        noches,
+        desglose: precioBase.desglose,
+        payment_pending_config: true,
+        message:
+          "Reserva creada. Configura MERCADOPAGO_ACCESS_TOKEN (sandbox) para habilitar el pago online.",
+      });
+    }
 
-    await supabaseAdmin
-      .from("reservas")
-      .update({ mp_preference_id: mpPref.preference_id })
-      .eq("id", reserva.id as string);
+    try {
+      const mpPref = await crearPreferenciaPago(reserva as never, producto, externalRef);
 
-    return NextResponse.json({
-      reserva_id: reserva.id,
-      numero: reserva.numero,
-      mp_preference_id: mpPref.preference_id,
-      mp_init_point: mpPref.init_point,
-      precio_total_clp: precioTotal,
-      noches,
-      desglose: precioBase.desglose,
-    });
+      await supabaseAdmin
+        .from("reservas")
+        .update({ mp_preference_id: mpPref.preference_id })
+        .eq("id", reserva.id as string);
+
+      return NextResponse.json({
+        reserva_id: reserva.id,
+        numero: reserva.numero,
+        mp_preference_id: mpPref.preference_id,
+        mp_init_point: mpPref.init_point ?? mpPref.sandbox_init_point,
+        precio_total_clp: precioTotal,
+        noches,
+        desglose: precioBase.desglose,
+      });
+    } catch (mpErr) {
+      logger.error("[API reservations] Error MercadoPago tras crear reserva:", mpErr);
+      return NextResponse.json(
+        {
+          reserva_id: reserva.id,
+          numero: reserva.numero,
+          mp_preference_id: null,
+          mp_init_point: null,
+          precio_total_clp: precioTotal,
+          noches,
+          desglose: precioBase.desglose,
+          payment_error: true,
+          message:
+            "Reserva creada, pero MercadoPago rechazó la preferencia. Revisa el Access Token de prueba.",
+        },
+        { status: 502 }
+      );
+    }
   } catch (err) {
     logger.error("[API reservations] Error inesperado:", err);
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
