@@ -1,51 +1,73 @@
 /**
- * Validación centralizada de variables de entorno.
- * Importar en las rutas API que lo necesiten.
- * En producción falla rápido si faltan variables críticas.
+ * Validación centralizada de variables de entorno (F0-06).
+ * Durante `next build` no debe lanzar.
  */
 
-interface EnvSchema {
-  key: string;
-  required: boolean;
-  secret?: boolean; // No loggear el valor
+const REQUIRED_IN_PROD = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "JWT_SECRET",
+  "ADMIN_USERNAME",
+  "ADMIN_PASSWORD",
+  "MERCADOPAGO_ACCESS_TOKEN",
+  "MERCADOPAGO_WEBHOOK_SECRET",
+  "CRON_SECRET",
+  "NEXT_PUBLIC_BASE_URL",
+] as const;
+
+function isPlaceholder(value: string | undefined): boolean {
+  if (!value) return true;
+  return (
+    value.includes("tu-") ||
+    value.includes("cambiar-") ||
+    value === "dev-secret-change-in-prod" ||
+    value === "TEST-token"
+  );
 }
 
-const SERVER_ENV: EnvSchema[] = [
-  { key: "NEXT_PUBLIC_SUPABASE_URL", required: true },
-  { key: "NEXT_PUBLIC_SUPABASE_ANON_KEY", required: true, secret: true },
-  { key: "SUPABASE_SERVICE_ROLE_KEY", required: true, secret: true },
-  { key: "MERCADOPAGO_ACCESS_TOKEN", required: true, secret: true },
-  { key: "MERCADOPAGO_WEBHOOK_SECRET", required: false, secret: true },
-  { key: "TWILIO_ACCOUNT_SID", required: false, secret: true },
-  { key: "TWILIO_AUTH_TOKEN", required: false, secret: true },
-  { key: "TWILIO_WHATSAPP_FROM", required: false },
-  { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", required: false },
-  { key: "GOOGLE_PRIVATE_KEY", required: false, secret: true },
-  { key: "GOOGLE_SPREADSHEET_ID", required: false },
-  { key: "ADMIN_USERNAME", required: true },
-  { key: "ADMIN_PASSWORD", required: true, secret: true },
-  { key: "JWT_SECRET", required: true, secret: true },
-  { key: "NEXT_PUBLIC_BASE_URL", required: true },
-  { key: "CRON_SECRET", required: false, secret: true },
-];
-
-export function validateEnv(): { valid: boolean; missing: string[]; warnings: string[] } {
+export function validateEnv(): {
+  valid: boolean;
+  missing: string[];
+  warnings: string[];
+} {
   const isProd = process.env.NODE_ENV === "production";
   const missing: string[] = [];
   const warnings: string[] = [];
 
-  for (const schema of SERVER_ENV) {
-    const value = process.env[schema.key];
-    if (!value) {
-      if (schema.required || isProd) {
-        missing.push(schema.key);
-      } else {
-        warnings.push(`${schema.key} no configurado (funcionalidad opcional deshabilitada)`);
-      }
+  for (const key of REQUIRED_IN_PROD) {
+    const value = process.env[key];
+    if (isPlaceholder(value)) {
+      if (isProd) missing.push(key);
+      else warnings.push(`${key} no configurado o es placeholder`);
     }
   }
 
+  if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32) {
+    if (isProd) missing.push("JWT_SECRET (mínimo 32 caracteres)");
+    else warnings.push("JWT_SECRET demasiado corto");
+  }
+
   return { valid: missing.length === 0, missing, warnings };
+}
+
+export function ensureEnvValidated(): void {
+  if (
+    process.env.NEXT_PHASE === "phase-production-build" ||
+    process.env.NEXT_PHASE === "phase-export"
+  ) {
+    return;
+  }
+
+  const { valid, missing, warnings } = validateEnv();
+  warnings.forEach((w) => console.warn(`[Env] ⚠️  ${w}`));
+  if (!valid) {
+    const msg = `[Env] ❌ Variables de entorno faltantes o inválidas: ${missing.join(", ")}.`;
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(msg);
+    }
+    console.error(msg);
+  }
 }
 
 export function requireEnv(key: string): string {
@@ -56,21 +78,15 @@ export function requireEnv(key: string): string {
   return value;
 }
 
-// Validación lazy: se ejecuta solo en runtime del servidor
-let validated = false;
-export function ensureEnvValidated() {
-  if (validated) return;
-  validated = true;
-  const { valid, missing, warnings } = validateEnv();
-  if (warnings.length > 0) {
-    warnings.forEach((w) => console.warn(`[Env] ⚠️  ${w}`));
-  }
-  if (!valid) {
-    const msg = `[Env] ❌ Variables de entorno faltantes: ${missing.join(", ")}`;
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(msg);
-    } else {
-      console.error(msg);
-    }
-  }
+export function isSupabaseConfigured(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return false;
+  if (isPlaceholder(url) || isPlaceholder(key)) return false;
+  return true;
+}
+
+export function allowDemoMode(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  return process.env.ALLOW_DEMO === "true" || !isSupabaseConfigured();
 }

@@ -1,12 +1,18 @@
-.env.local
-.env.*.local
+# Env y secretos
+.env
+.env.*
+!.env.example
+
+# Node / Next
 node_modules/
 .next/
 out/
 *.log
+*.tsbuildinfo
+
+# OS
 .DS_Store
 Thumbs.db
-.vercel
 
+# Vercel
 .vercel
-.env*.local

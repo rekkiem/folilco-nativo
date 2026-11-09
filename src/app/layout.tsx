@@ -64,13 +64,16 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" className={`${playfair.variable} ${dmSans.variable}`}>
+    <html
+      lang="es"
+      className={`${playfair.variable} ${dmSans.variable}`}
+      suppressHydrationWarning
+    >
       {/*
-        suppressHydrationWarning en <body> es necesario porque extensiones
-        del navegador (ej: Scribe, Grammarly, LastPass) inyectan atributos
-        como data-scribe-recorder-ready="true" en el DOM después del SSR,
-        causando hydration mismatch. Este flag le dice a React que ignore
-        diferencias en atributos del <body>.
+        suppressHydrationWarning en <html> y <body> es necesario porque
+        extensiones del navegador (Scribe, Grammarly, LastPass, etc.)
+        inyectan atributos como data-scribe-recorder-ready="true"
+        después del SSR y provocan hydration mismatch.
       */}
       <body
         className="font-body bg-cream-50 text-forest-900 antialiased"
