@@ -1,177 +1,179 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { obtenerPago, verificarFirmaWebhook } from "@/lib/mercadopago";
-import { enviarWhatsApp } from "@/lib/whatsapp";
-import { agregarFilaReserva, marcarAgendaOcupada } from "@/lib/sheets";
+import { enviarTelegram } from "@/lib/telegram";
 import { webhookLimiter, getClientIP } from "@/lib/rate-limit";
 import type { MercadoPagoWebhookBody } from "@/types";
 import { logger } from "@/lib/logger";
 
+/**
+ * O0-1: webhook idempotente + confirmación atómica vía confirmar_pago.
+ */
 export async function POST(req: NextRequest) {
-  // Rate limit
   const ip = getClientIP(req);
   const rl = webhookLimiter(ip);
   if (!rl.allowed) {
-    logger.warn(`[Webhook MP] Rate limit excedido desde ${ip}`);
+    logger.warn(`[Webhook MP] Rate limit desde ${ip}`);
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
 
-  // Verificar firma del webhook
   const xSignature = req.headers.get("x-signature") ?? "";
   const xRequestId = req.headers.get("x-request-id") ?? "";
-
-  let body: MercadoPagoWebhookBody;
   const rawText = await req.text();
 
+  let body: MercadoPagoWebhookBody;
   try {
     body = JSON.parse(rawText);
   } catch {
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  // Extraer ts de la firma
   const sigParts = xSignature.split(",");
   const tsPart = sigParts.find((p) => p.startsWith("ts="));
   const ts = tsPart ? tsPart.split("=")[1] : "";
-  const dataId = body?.data?.id ?? "";
+  const dataId = String(body?.data?.id ?? "");
 
-  const firmaValida = verificarFirmaWebhook(xSignature, xRequestId, dataId, ts);
-  if (!firmaValida) {
-    logger.warn("[Webhook MP] Firma inválida – posible intento no autorizado");
-    // Retornar 200 igual para no revelar info al atacante
+  if (!verificarFirmaWebhook(xSignature, xRequestId, dataId, ts)) {
+    logger.warn("[Webhook MP] Firma inválida");
     return NextResponse.json({ received: true });
   }
 
-  // Solo procesar notificaciones de pago
-  if (body.type !== "payment") {
+  if (body.type !== "payment" || !dataId) {
     return NextResponse.json({ received: true });
   }
 
-  const paymentId = body.data.id;
+  const paymentId = dataId;
+
+  const { error: insertEvtErr } = await supabaseAdmin.from("webhook_eventos").insert({
+    proveedor: "mercadopago",
+    evento_id: paymentId,
+    tipo: body.type,
+    payload: body as unknown as Record<string, unknown>,
+    estado: "recibido",
+  });
+
+  if (insertEvtErr) {
+    if (insertEvtErr.code === "23505") {
+      logger.info(`[Webhook MP] Evento ${paymentId} ya registrado – idempotente`);
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    logger.error("[Webhook MP] Error insert webhook_eventos", insertEvtErr);
+  }
 
   try {
-    // 1. Obtener detalles del pago desde MercadoPago
     const pago = await obtenerPago(paymentId);
+    const externalRef = pago.external_reference as string | undefined;
+    const status = String(pago.status ?? "");
+    const amount =
+      typeof pago.transaction_amount === "number"
+        ? Math.round(pago.transaction_amount)
+        : null;
+    const currency = String(pago.currency_id ?? "CLP");
 
-    logger.info(`[Webhook MP] Pago ${paymentId} – Status: ${pago.status} – ExternalRef: ${pago.external_reference}`);
+    logger.info(`[Webhook MP] Pago ${paymentId} status=${status} ref=${externalRef}`);
 
-    if (!pago.external_reference) {
-      logger.warn("[Webhook MP] Pago sin external_reference, ignorando");
-      return NextResponse.json({ received: true });
-    }
-
-    // 2. Buscar la reserva por external_reference
-    const { data: reserva, error: reservaErr } = await supabaseAdmin
-      .from("reservas")
-      .select("*, productos(*)")
-      .eq("mp_external_reference", pago.external_reference)
-      .single();
-
-    if (reservaErr || !reserva) {
-      logger.warn(`[Webhook MP] Reserva no encontrada para ref: ${pago.external_reference}`);
-      return NextResponse.json({ received: true });
-    }
-
-    // 3. Actualizar estado según el pago
-    if (pago.status === "approved") {
-      // Evitar procesar duplicados
-      if (reserva.estado === "confirmada") {
-        logger.info(`[Webhook MP] Reserva ${reserva.numero} ya estaba confirmada, skip`);
-        return NextResponse.json({ received: true });
-      }
-
-      // Confirmar la reserva
+    if (!externalRef) {
       await supabaseAdmin
-        .from("reservas")
-        .update({
-          estado: "confirmada",
-          mp_payment_id: paymentId,
-          mp_payment_status: pago.status,
-        })
-        .eq("id", reserva.id);
+        .from("webhook_eventos")
+        .update({ estado: "ignorado", procesado_at: new Date().toISOString() })
+        .eq("proveedor", "mercadopago")
+        .eq("evento_id", paymentId);
+      return NextResponse.json({ received: true });
+    }
 
-      // Re-fetch la reserva actualizada
-      const { data: reservaActualizada } = await supabaseAdmin
-        .from("reservas")
-        .select("*")
-        .eq("id", reserva.id)
-        .single();
-
-      if (!reservaActualizada) {
-        logger.error("[Webhook MP] Error refetching reserva actualizada");
-        return NextResponse.json({ received: true });
-      }
-
-      const producto = reserva.productos;
-
-      // 4. Disparar efectos secundarios en paralelo
-      const [waResult, sheetsResult, agendaResult] = await Promise.allSettled([
-        // WhatsApp de confirmación (solo si no se envió antes)
-        !reserva.wa_confirmacion_sent
-          ? enviarWhatsApp("confirmacion", reservaActualizada, producto).then(
-              async (res) => {
-                if (res.success) {
-                  await supabaseAdmin
-                    .from("reservas")
-                    .update({
-                      wa_confirmacion_sent: true,
-                      wa_confirmacion_sent_at: new Date().toISOString(),
-                    })
-                    .eq("id", reserva.id);
-                }
-                return res;
-              }
-            )
-          : Promise.resolve({ success: true, skip: true }),
-
-        // Google Sheets: agregar fila de reserva
-        !reserva.sheets_synced
-          ? agregarFilaReserva(reservaActualizada, producto).then(async (res) => {
-              if (res.success) {
-                await supabaseAdmin
-                  .from("reservas")
-                  .update({ sheets_synced: true })
-                  .eq("id", reserva.id);
-              }
-              return res;
-            })
-          : Promise.resolve({ success: true, skip: true }),
-
-        // Google Sheets: marcar agenda ocupada
-        marcarAgendaOcupada(reservaActualizada),
-      ]);
-
-      logger.info(`[Webhook MP] Reserva ${reservaActualizada.numero} confirmada`, {
-        whatsapp: waResult.status,
-        sheets: sheetsResult.status,
-        agenda: agendaResult.status,
+    if (status === "approved") {
+      const { data: conf, error: confErr } = await supabaseAdmin.rpc("confirmar_pago", {
+        p_external_reference: externalRef,
+        p_payment_id: paymentId,
+        p_payment_status: status,
+        p_amount_cents: amount,
+        p_currency: currency,
       });
-    } else if (pago.status === "rejected" || pago.status === "cancelled") {
-      await supabaseAdmin
-        .from("reservas")
-        .update({
-          estado: "cancelada",
-          mp_payment_id: paymentId,
-          mp_payment_status: pago.status,
-        })
-        .eq("id", reserva.id);
 
-      logger.info(`[Webhook MP] Reserva ${reserva.numero} cancelada/rechazada`);
+      if (confErr) {
+        logger.error("[Webhook MP] confirmar_pago error", confErr);
+        await supabaseAdmin
+          .from("webhook_eventos")
+          .update({
+            estado: "error",
+            error: confErr.message,
+            procesado_at: new Date().toISOString(),
+          })
+          .eq("proveedor", "mercadopago")
+          .eq("evento_id", paymentId);
+        return NextResponse.json({ received: true });
+      }
+
+      const row = Array.isArray(conf) ? conf[0] : conf;
+      const resultado = row?.resultado as string;
+
+      if (resultado === "confirmada") {
+        await enviarTelegram(
+          `✅ Reserva confirmada ${row.numero}\nPago MP: ${paymentId}\nMonto: $${amount} CLP`
+        );
+        await supabaseAdmin.from("outbox").insert({
+          tipo: "reserva_confirmada",
+          payload: {
+            reserva_id: row.reserva_id,
+            numero: row.numero,
+            payment_id: paymentId,
+          },
+        });
+      } else if (resultado === "pago_huerfano") {
+        await enviarTelegram(
+          `⚠️ PAGO HUÉRFANO\nReserva: ${row.numero}\nPago: ${paymentId}\nMonto: $${amount}\nRevisar en MP y admin.`
+        );
+      } else if (resultado === "monto_invalido" || resultado === "moneda_invalida") {
+        await enviarTelegram(
+          `⚠️ Pago inconsistente (${resultado})\nRef: ${externalRef}\nPago: ${paymentId}`
+        );
+      }
+
+      await supabaseAdmin
+        .from("webhook_eventos")
+        .update({ estado: "procesado", procesado_at: new Date().toISOString() })
+        .eq("proveedor", "mercadopago")
+        .eq("evento_id", paymentId);
+
+      return NextResponse.json({ received: true, resultado });
+    }
+
+    if (["rejected", "cancelled", "refunded", "charged_back"].includes(status)) {
+      await supabaseAdmin.rpc("confirmar_pago", {
+        p_external_reference: externalRef,
+        p_payment_id: paymentId,
+        p_payment_status: status,
+        p_amount_cents: amount,
+        p_currency: currency,
+      });
+      if (status === "charged_back" || status === "refunded") {
+        await enviarTelegram(`🔔 MP ${status}: pago ${paymentId} ref ${externalRef}`);
+      }
     } else {
-      // Pago pendiente: actualizar estado del pago sin cambiar estado de reserva
       await supabaseAdmin
         .from("reservas")
-        .update({
-          mp_payment_id: paymentId,
-          mp_payment_status: pago.status,
-        })
-        .eq("id", reserva.id);
+        .update({ mp_payment_id: paymentId, mp_payment_status: status })
+        .eq("mp_external_reference", externalRef);
     }
+
+    await supabaseAdmin
+      .from("webhook_eventos")
+      .update({ estado: "procesado", procesado_at: new Date().toISOString() })
+      .eq("proveedor", "mercadopago")
+      .eq("evento_id", paymentId);
 
     return NextResponse.json({ received: true });
   } catch (err) {
-    logger.error("[Webhook MP] Error procesando webhook:", err);
-    // Retornar 200 para que MercadoPago no reintente (los reintentos los manejamos nosotros)
+    logger.error("[Webhook MP] Error:", err);
+    await supabaseAdmin
+      .from("webhook_eventos")
+      .update({
+        estado: "error",
+        error: err instanceof Error ? err.message : "unknown",
+        procesado_at: new Date().toISOString(),
+      })
+      .eq("proveedor", "mercadopago")
+      .eq("evento_id", paymentId);
     return NextResponse.json({ received: true });
   }
 }
