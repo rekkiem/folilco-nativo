@@ -4,15 +4,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 
 /**
- * F0-06: sin fallback público inseguro.
- * No lanzar en import/build (next build usa NODE_ENV=production).
+ * O0-4: sin secreto de respaldo. Si falta JWT_SECRET válido, falla.
+ * No se llama en import/build top-level.
  */
 function getJwtSecret(): Uint8Array {
   const raw = process.env.JWT_SECRET;
-  if (raw && raw.length >= 32) {
-    return new TextEncoder().encode(raw);
+  if (!raw || raw.length < 32 || raw.includes("tu-") || raw.includes("cambiar-") || raw.includes("dev-only")) {
+    throw new Error("JWT_SECRET no configurado o inseguro (mín. 32 caracteres, no placeholder)");
   }
-  return new TextEncoder().encode("dev-only-insecure-secret-min-32-chars!!");
+  return new TextEncoder().encode(raw);
 }
 
 export const COOKIE_NAME = "folilco_admin_token";
@@ -23,11 +23,6 @@ export interface AdminPayload {
 }
 
 export async function firmarToken(payload: AdminPayload): Promise<string> {
-  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("JWT_SECRET no configurado o demasiado corto");
-    }
-  }
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
