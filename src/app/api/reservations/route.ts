@@ -312,6 +312,25 @@ export async function POST(req: NextRequest) {
     const externalRef = randomUUID();
 
     let reserva: Record<string, unknown> | null = null;
+
+    // O0-5: límites por email / teléfono (Postgres)
+    const { data: okEmail } = await supabaseAdmin.rpc("check_rate_limit", {
+      p_key: `reserva:email:${data.huesped_email.toLowerCase().trim()}`,
+      p_max: 5,
+      p_window_seconds: 86400,
+    });
+    const { data: okPhone } = await supabaseAdmin.rpc("check_rate_limit", {
+      p_key: `reserva:phone:${data.huesped_telefono.trim()}`,
+      p_max: 5,
+      p_window_seconds: 86400,
+    });
+    if (okEmail === false || okPhone === false) {
+      return NextResponse.json(
+        { error: "Demasiadas reservas recientes con estos datos. Contáctanos por WhatsApp." },
+        { status: 429 }
+      );
+    }
+
     const { data: rpcReserva, error: rpcErr } = await supabaseAdmin.rpc("crear_reserva", {
       p_producto_id: data.producto_id,
       p_fecha_inicio: data.fecha_inicio,
@@ -329,52 +348,29 @@ export async function POST(req: NextRequest) {
       p_hold_minutes: 30,
     });
 
-    if (!rpcErr && rpcReserva) {
-      reserva = Array.isArray(rpcReserva) ? rpcReserva[0] : rpcReserva;
-    } else {
-      if (rpcErr) {
-        const msg = rpcErr.message || "";
-        if (msg.includes("FECHAS_NO_DISPONIBLES") || msg.includes("FECHAS_BLOQUEADAS")) {
-          return NextResponse.json(
-            { error: "Las fechas seleccionadas ya no están disponibles." },
-            { status: 409 }
-          );
-        }
-        if (msg.includes("CAPACIDAD_EXCEDIDA")) {
-          return NextResponse.json({ error: "Capacidad excedida" }, { status: 400 });
-        }
-        logger.warn("[API reservations] RPC crear_reserva no disponible, fallback insert", rpcErr);
+    // O0-3: sin INSERT de respaldo
+    if (rpcErr || !rpcReserva) {
+      const msg = rpcErr?.message || "";
+      if (msg.includes("FECHAS_NO_DISPONIBLES") || msg.includes("FECHAS_BLOQUEADAS")) {
+        return NextResponse.json(
+          { error: "Las fechas seleccionadas ya no están disponibles." },
+          { status: 409 }
+        );
       }
-
-      const { data: inserted, error: reservaErr } = await supabaseAdmin
-        .from("reservas")
-        .insert({
-          huesped_nombre: data.huesped_nombre.trim(),
-          huesped_email: data.huesped_email.toLowerCase().trim(),
-          huesped_telefono: data.huesped_telefono.trim(),
-          huesped_rut: data.huesped_rut?.trim() ?? null,
-          huesped_nota: data.huesped_nota?.trim() ?? null,
-          producto_id: data.producto_id,
-          producto_nombre: producto.nombre,
-          fecha_inicio: data.fecha_inicio,
-          fecha_fin: data.fecha_fin,
-          cantidad_personas: data.cantidad_personas,
-          precio_base_clp: producto.precio_clp,
-          precio_total_clp: precioTotal,
-          estado: "pendiente",
-          expira_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-          mp_external_reference: externalRef,
-          origen: "web",
-        })
-        .select()
-        .single();
-
-      if (reservaErr || !inserted) {
-        logger.error("[API reservations] Error creando reserva:", reservaErr);
-        return NextResponse.json({ error: "Error al crear la reserva" }, { status: 500 });
+      if (msg.includes("CAPACIDAD_EXCEDIDA")) {
+        return NextResponse.json({ error: "Capacidad excedida" }, { status: 400 });
       }
-      reserva = inserted;
+      if (msg.includes("PRECIO_INVALIDO")) {
+        return NextResponse.json({ error: "Precio inválido" }, { status: 400 });
+      }
+      if (msg.includes("PRODUCTO_NO_ENCONTRADO")) {
+        return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
+      }
+      logger.error("[API reservations] crear_reserva falló (sin fallback)", rpcErr);
+      return NextResponse.json({ error: "Error al crear la reserva" }, { status: 500 });
     }
+
+    reserva = Array.isArray(rpcReserva) ? rpcReserva[0] : rpcReserva;
 
     if (!reserva) {
       return NextResponse.json({ error: "Error al crear la reserva" }, { status: 500 });
